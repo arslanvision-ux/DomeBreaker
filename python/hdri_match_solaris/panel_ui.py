@@ -156,6 +156,21 @@ class DropLabel(QtWidgets.QLabel):
             event.ignore()
 
 
+class ClickablePreviewLabel(QtWidgets.QLabel):
+    """
+    QLabel that emits double_clicked signal on mouse double-click and displays a pointing hand cursor.
+    """
+    double_clicked = QtCore.Signal()
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setToolTip("Double-click to open large floating screen view")
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self.double_clicked.emit()
+        super().mouseDoubleClickEvent(event)
 
 
 class SliderDoubleSpinBox(QtWidgets.QWidget):
@@ -1152,6 +1167,114 @@ class HDRILargePreviewDialog(QtWidgets.QDialog):
     def _display_pixmap(self):
         if not self._cached_pixmap:
             return
+        if self.btn_fit.isChecked():
+            view_size = self.scroll_area.viewport().size()
+            scaled = self._cached_pixmap.scaled(
+                view_size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+            )
+            self.lbl_image.setPixmap(scaled)
+        else:
+            self.lbl_image.setPixmap(self._cached_pixmap)
+
+
+class HDRIBoundaryLargeViewDialog(QtWidgets.QDialog):
+    """
+    Large floating popup inspection window for the Visual Boundary Overlay Preview.
+    Allows artists to examine room boundaries, ceiling lines, floor corners, and horizon
+    in high-resolution across a large or multi-monitor workspace.
+    """
+    def __init__(self, parent_panel=None):
+        super().__init__(parent_panel)
+        self.panel = parent_panel
+        self._cached_pixmap = None
+
+        self.setWindowTitle("DomeBreaker — Visual Boundary Overlay (Large Inspector)")
+        self.resize(1200, 680)
+        self.setMinimumSize(640, 380)
+        self.setStyleSheet("""
+            QDialog { background-color: #141619; color: #ddd; }
+            QLabel { color: #ccc; }
+            QPushButton { background-color: #25282d; color: #ddd; border: 1px solid #3d434d; border-radius: 3px; padding: 4px 12px; font-size: 11px; }
+            QPushButton:hover { background-color: #323740; border-color: #555e6d; color: #fff; }
+        """)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        # Top Control Bar
+        top_bar = QtWidgets.QHBoxLayout()
+        top_bar.setSpacing(10)
+
+        title_lbl = QtWidgets.QLabel("Visual Boundary Overlay Inspector")
+        title_lbl.setStyleSheet("font-weight: bold; font-size: 13px; color: #ffcc44;")
+        top_bar.addWidget(title_lbl)
+
+        self.lbl_dims_info = QtWidgets.QLabel("---")
+        self.lbl_dims_info.setStyleSheet("color: #9da5b4; font-size: 11px; margin-left: 10px;")
+        top_bar.addWidget(self.lbl_dims_info, 1)
+
+        self.btn_fit = QtWidgets.QPushButton("Fit Window")
+        self.btn_fit.setCheckable(True)
+        self.btn_fit.setChecked(True)
+        self.btn_fit.toggled.connect(self._display_pixmap)
+        top_bar.addWidget(self.btn_fit)
+
+        self.btn_close = QtWidgets.QPushButton("✕ Close")
+        self.btn_close.clicked.connect(self.accept)
+        top_bar.addWidget(self.btn_close)
+
+        layout.addLayout(top_bar)
+
+        # Central Image Viewport Area
+        self.scroll_area = QtWidgets.QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet("QScrollArea { background-color: #0b0c0e; border: 1px solid #23272f; border-radius: 4px; }")
+
+        self.lbl_image = QtWidgets.QLabel()
+        self.lbl_image.setAlignment(QtCore.Qt.AlignCenter)
+        self.lbl_image.setStyleSheet("background-color: transparent;")
+        self.scroll_area.setWidget(self.lbl_image)
+
+        layout.addWidget(self.scroll_area, 1)
+
+        # Bottom Legend & Status Bar
+        bot_bar = QtWidgets.QHBoxLayout()
+        bot_bar.setSpacing(12)
+
+        legend_items = [
+            ("■ Floor", "#00e5ff"),
+            ("■ Ceiling", "#ffb700"),
+            ("■ 4 Corners", "#ff007f"),
+            ("┅ Horizon", "#bbbbbb"),
+        ]
+        for name, col in legend_items:
+            lbl_leg = QtWidgets.QLabel(name)
+            lbl_leg.setStyleSheet(f"color: {col}; font-weight: bold; font-size: 11px;")
+            bot_bar.addWidget(lbl_leg)
+
+        bot_bar.addSpacing(20)
+        lbl_hint = QtWidgets.QLabel("💡 Live Sync: Sliders adjusted in the main panel update here in real-time.")
+        lbl_hint.setStyleSheet("color: #777; font-size: 11px; font-style: italic;")
+        bot_bar.addWidget(lbl_hint, 1)
+
+        layout.addLayout(bot_bar)
+
+    def set_overlay_pixmap(self, pixmap, info_text=""):
+        self._cached_pixmap = pixmap
+        if info_text:
+            self.lbl_dims_info.setText(info_text)
+        self._display_pixmap()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._display_pixmap()
+
+    def _display_pixmap(self):
+        if not self._cached_pixmap or self._cached_pixmap.isNull():
+            self.lbl_image.setText("No overlay preview generated yet. Run 'Analyze Room Boundaries' first.")
+            return
+
         if self.btn_fit.isChecked():
             view_size = self.scroll_area.viewport().size()
             scaled = self._cached_pixmap.scaled(
@@ -7171,16 +7294,20 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         prev_lay.setContentsMargins(8, 12, 8, 8)
         prev_lay.setSpacing(6)
 
-        self.lbl_ana_preview = QtWidgets.QLabel("Boundary overlay preview will appear here upon analysis")
+        self.lbl_ana_preview = ClickablePreviewLabel(
+            "Boundary overlay preview will appear here upon analysis\n(💡 Double-click to open enlarged screen view)"
+        )
         self.lbl_ana_preview.setAlignment(QtCore.Qt.AlignCenter)
         self.lbl_ana_preview.setMinimumHeight(180)
         self.lbl_ana_preview.setMaximumHeight(260)
         self.lbl_ana_preview.setStyleSheet(
             "QLabel { background-color: #0e1014; border: 1px solid #282c34; border-radius: 4px; color: #5c6370; font-size: 11px; }"
+            "QLabel:hover { border-color: #ffcc44; }"
         )
+        self.lbl_ana_preview.double_clicked.connect(self._open_large_boundary_overlay)
         prev_lay.addWidget(self.lbl_ana_preview)
 
-        # Color legend
+        # Color legend & Enlarge button
         legend_row = QtWidgets.QHBoxLayout()
         legend_row.setSpacing(8)
         legend_items = [
@@ -7194,6 +7321,17 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             lbl_leg.setStyleSheet(f"color: {col}; font-weight: bold; font-size: 11px;")
             legend_row.addWidget(lbl_leg)
         legend_row.addStretch()
+
+        self.btn_ana_enlarge = QtWidgets.QPushButton("⛶ Enlarge View")
+        self.btn_ana_enlarge.setToolTip("Open large floating screen view of the boundary overlay (or double-click the preview)")
+        self.btn_ana_enlarge.setStyleSheet(
+            "QPushButton { background-color: #2c313a; color: #abb2bf; border: 1px solid #3e4451; "
+            "border-radius: 3px; padding: 2px 8px; font-size: 10px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #3e4451; color: #fff; border-color: #ffcc44; }"
+        )
+        self.btn_ana_enlarge.clicked.connect(self._open_large_boundary_overlay)
+        legend_row.addWidget(self.btn_ana_enlarge)
+
         prev_lay.addLayout(legend_row)
         parent_layout.addWidget(grp_preview)
 
@@ -7417,7 +7555,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 room_height=h,
                 tripod_height=tripod,
                 yaw_deg=yaw,
-                num_points=640,
+                num_points=1280,
             )
 
             res_for_overlay = {
@@ -7426,19 +7564,48 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 "corners_x_norm": curves["corners_x_norm"],
             }
 
-            pil_overlay = _ana.generate_room_analysis_overlay(img_input, res_for_overlay, preview_w=640, preview_h=320)
+            pil_overlay = _ana.generate_room_analysis_overlay(img_input, res_for_overlay, preview_w=1280, preview_h=640)
             buf = io.BytesIO()
             pil_overlay.save(buf, format="PNG")
             buf.seek(0)
             qimg = QtGui.QImage.fromData(buf.getvalue())
             pixmap = QtGui.QPixmap.fromImage(qimg)
+            self._ana_last_overlay_pixmap = pixmap
 
             lbl_w = max(320, self.lbl_ana_preview.width() - 8)
             lbl_h = max(160, self.lbl_ana_preview.height() - 8)
             scaled = pixmap.scaled(lbl_w, lbl_h, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
             self.lbl_ana_preview.setPixmap(scaled)
+
+            # Live update large preview window if open
+            if hasattr(self, '_boundary_large_win') and self._boundary_large_win and self._boundary_large_win.isVisible():
+                info_text = f"Room: W={w:.2f}m | D={d:.2f}m | H={h:.2f}m | Yaw={yaw:.1f}° | Tripod={tripod:.2f}m"
+                self._boundary_large_win.set_overlay_pixmap(pixmap, info_text)
         except Exception:
             pass
+
+    def _open_large_boundary_overlay(self):
+        """Open the large floating inspection window for the Visual Boundary Overlay Preview."""
+        if not hasattr(self, '_boundary_large_win') or self._boundary_large_win is None:
+            self._boundary_large_win = HDRIBoundaryLargeViewDialog(self)
+
+        self._update_analyzer_overlay()
+        if hasattr(self, '_ana_last_overlay_pixmap') and self._ana_last_overlay_pixmap:
+            w = self.sld_ana_width.value()
+            d = self.sld_ana_depth.value()
+            h = self.sld_ana_height.value()
+            tripod = self.sld_ana_tripod_height.value()
+            yaw = self.sld_ana_yaw_offset.value()
+            if getattr(self, '_ana_last_result', None):
+                yaw = (self._ana_last_result.get("yaw", 0.0) + yaw) % 360.0
+            info_text = f"Room: W={w:.2f}m | D={d:.2f}m | H={h:.2f}m | Yaw={yaw:.1f}° | Tripod={tripod:.2f}m"
+            self._boundary_large_win.set_overlay_pixmap(self._ana_last_overlay_pixmap, info_text)
+        else:
+            self._boundary_large_win.set_overlay_pixmap(None, "No analysis run yet. Click 'Analyze Room Boundaries' to generate overlay.")
+
+        self._boundary_large_win.show()
+        self._boundary_large_win.raise_()
+        self._boundary_large_win.activateWindow()
 
     def _apply_analyzer_to_room_box(self):
         """Transfer solved room dimensions and camera offsets into DomeBreaker, snapping practical lights."""
