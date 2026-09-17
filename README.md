@@ -15,7 +15,7 @@
 </div>
 
 ---
-Buy me a coffee https://buymeacoffee.com/arslansvision/domebreaker
+Buy Me a Coffee: https://buymeacoffee.com/arslansvision/domebreaker
 
 DomeBreaker is a high-performance Houdini Solaris / OpenUSD suite engineered to break the traditional limitations of infinite flat environment domes in feature film and episodic VFX pipelines. By transforming 2D equirectangular panoramas into parallax-accurate 3D room boxes, extracting practical lights with automatic inpainting, and constructing native multi-renderer USD networks, DomeBreaker gives lighters and lookdev artists physically plausible ground reflections, localized occlusion, and real-time interactive feedback.
 
