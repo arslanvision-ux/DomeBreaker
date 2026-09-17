@@ -133,18 +133,85 @@ The updater automatically pulls changes from GitHub (`https://github.com/arslanv
 
 ---
 
-## 🛠️ Typical Lookdev Workflow
+## 📖 Step-by-Step Tutorial: Interior Lookdev & Room Box Lighting
 
-1. **Load HDRI**: Drop or select your calibrated 360° HDR panorama in the DomeBreaker panel.
-2. **Analyze Room Boundaries**:
-   * Under **Room Boundary Analyzer**, click **`🔍 Analyze Room Boundaries`** to solve room dimensions.
-   * Click **`📐 Auto-Align Room to HDRI`** to calculate camera offsets.
-   * Click **`👉 Apply Solved Dimensions & Align Room Box`** to generate the 3D room box.
-3. **Extract Practicals**:
-   * Under **Light Extraction**, click **`🔍 Analyze Hotspots`**.
-   * Click **`Extract to Solaris RectLights`** — practical lights are created and their diffuse textures are automatically inpainted.
-4. **Calibrate Lookdev Rig**: Click **`🔮 Add / Update Lookdev Spheres`** to place calibrated Chrome and Grey reference balls into your scene.
-5. **Bake Planar Textures**: Click **`Bake Planar Textures (4K/8K)`** for ultra-sharp rectilinear wall projections with zero spherical distortion.
+When lighting an interior from an HDRI, an infinite dome light causes flat, unoccluded ambient light that leaks through walls. **DomeBreaker** solves this by converting the panorama into a **3D perspective-mapped architectural room box** with realistic parallax, correct wall occlusion, floor bounce, and physical window/lamp portals.
+
+---
+
+### The Core 4-Button Sequence
+
+Once your HDRI is loaded and you have set **Projection Mode: Room Box**, scroll down to the **Room Boundary Analyzer** section and execute this exact sequence:
+
+`	ext
+[Step 1] 🔍 Analyze Room Boundaries
+    ↳ Detects physical room Width, Depth, and Height via computer vision
+
+[Step 2] 📐 Auto-Align Room to HDRI
+    ↳ Computes Camera Tripod Height, X/Z Offsets, and Yaw Orientation
+
+[Step 3] 👉 Apply Solved Dimensions & Align Room Box
+    ↳ Pushes solved physical dimensions and camera offsets into DomeBreaker
+
+[Step 4] 📐 Build Solaris USD Projection Mesh
+    ↳ Constructs the live 3D USD room box on the /stage
+`
+
+---
+
+### Detailed Walkthrough
+
+#### 1. Load & Calibrate Your Interior HDRI
+* In **Section 1: HDRI Setup & Calibration** (top of the panel):
+  * Click **Browse** and select your interior .hdr or .exr panorama (e.g. living_room.hdr, hotel_room.exr).
+  * The thumbnail preview, resolution, and dynamic range stats will appear immediately.
+  * *(Optional)* If your HDRI contains a Macbeth ColorChecker, click **Auto-Crop & Calibrate Macbeth** to normalize exposure and white balance to ACEScg standards.
+
+#### 2. Select Room Box Projection Mode
+* In **Section 2: Projection & Spatial Geometry**:
+  * Set the **Projection Mode** dropdown to **Room Box (Walls, Floor & Ceiling)** *(instead of Infinite Dome or Ground Plane)*.
+
+#### 3. AI / Computer Vision Room Boundary Analysis
+* Under the **Room Boundary Analyzer** section:
+  1. Click **🔍 Analyze Room Boundaries**:
+     * Scans the equirectangular image for ceiling/wall corners, floor/wall baselines, and perspective vanishing points.
+     * Generates initial estimates for **Width**, **Depth**, and **Height** (e.g. 6.2m × 8.4m × 3.1m).
+  2. Click **📐 Auto-Align Room to HDRI**:
+     * Solves the photographer's camera tripod height (1.2m – 1.6m), camera X/Z center offsets, and room yaw rotation.
+     * Aligns the perspective wireframe directly with the panorama.
+  3. **Inspect the Visual Boundary Overlay**:
+     * Cyan lines indicate wall/ceiling junctions; green lines indicate floor baselines.
+     * **Tip**: **Double-click the preview image** to open the interactive **Large Screen View** window for real-time inspection.
+  4. Click **👉 Apply Solved Dimensions & Align Room Box**:
+     * Locks in the solved room dimensions and camera offsets.
+     * Pre-aligns wall planes for light snapping.
+
+#### 4. Build the 3D Solaris USD Projection Mesh
+* Click the primary action button:
+  * 👉 **📐 Build Solaris USD Projection Mesh**
+* **What happens in Solaris**:
+  * Constructs the /stage/room geometry directly on your USD stage.
+  * Perspective-projects the HDRI across all 6 planar surfaces (North, South, East, West walls, Floor, Ceiling).
+  * As your camera navigates the room in the Solaris viewport, you get **physically correct parallax** and proper wall shadow occlusion.
+
+#### 5. Bake Planar Textures (Zero-Distortion)
+* Under **Texture Baking**:
+  * Choose your target resolution (e.g. 2048 or 4096).
+  * Click **🖼️ Bake Planar Textures**.
+  * DomeBreaker generates 6 distortion-free rectilinear OpenEXR texture maps and assigns them to native **Karma / Arnold / Redshift / RenderMan** physical shaders in the stage material library.
+
+#### 6. Extract Windows & Lamps as Physical USD Lights
+* In an interior, light bulbs and windows should emit direct illumination and sharp specular highlights:
+  1. In **Section 3: Practical Light Extraction**, click **💡 Extract Practical Lights**.
+     * Automatically identifies hotspots and creates native USD RectLight and DiskLight primitives positioned directly against the walls and ceiling with matching Kelvin color temperatures and intensities.
+  2. Click **🎨 Inpaint Emitted Hotspots**:
+     * Erases bright hotspots from the texture maps so direct illumination is not double-counted.
+
+#### 7. Verify Lookdev in the Viewport
+* In **Section 5: Lookdev Rig & Turntable**:
+  * Click **🎯 Create Lookdev Turntable Rig** to place calibrated 50% Neutral Grey and 100% Mirror Chrome calibration spheres at the center of the room.
+  * Switch your Solaris viewport delegate to **Karma CPU/XPU** (or **Husk / Redshift / Arnold**).
+  * The chrome sphere reflects the 3D room with accurate perspective, while the grey sphere shows physical ambient occlusion and directionality from the windows.
 
 ---
 
