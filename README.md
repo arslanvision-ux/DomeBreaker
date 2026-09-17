@@ -171,7 +171,7 @@ Once your HDRI is loaded and you have set **Projection Mode: Room Box**, scroll 
 * In **Section 2: Projection & Spatial Geometry**:
   * Set the **Projection Mode** dropdown to **Room Box (Walls, Floor & Ceiling)** *(instead of Infinite Dome or Ground Plane)*.
 
-#### 3. AI / Computer Vision Room Boundary Analysis
+#### 3. Computer Vision Room Boundary Analysis
 * Under the **Room Boundary Analyzer** section:
   1. Click **🔍 Analyze Room Boundaries**:
      * Scans the equirectangular image for ceiling/wall corners, floor/wall baselines, and perspective vanishing points.
