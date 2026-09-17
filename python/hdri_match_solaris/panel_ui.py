@@ -2523,37 +2523,37 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         # Lookdev Rig Controls (Ref Balls & Stand)
         ld_row_1 = QtWidgets.QHBoxLayout()
-        self.sld_lookdev_radius = SliderDoubleSpinBox(0.05, 1.5, 0.05, 0.15, decimals=2)
-        self.sld_lookdev_radius.setToolTip("Radius of the lookdev reference spheres in meters (default 0.15m = 30cm diameter).")
-        self.sld_lookdev_height = SliderDoubleSpinBox(0.0, 3.0, 0.1, 1.2, decimals=2)
-        self.sld_lookdev_height.setToolTip("Height of the stand mast from floor to sphere mounting bar (default 1.2m chest/eye height).")
+        self.sld_splat_lookdev_radius = SliderDoubleSpinBox(0.05, 1.5, 0.05, 0.15, decimals=2)
+        self.sld_splat_lookdev_radius.setToolTip("Radius of the lookdev reference spheres in meters (default 0.15m = 30cm diameter).")
+        self.sld_splat_lookdev_height = SliderDoubleSpinBox(0.0, 3.0, 0.1, 1.2, decimals=2)
+        self.sld_splat_lookdev_height.setToolTip("Height of the stand mast from floor to sphere mounting bar (default 1.2m chest/eye height).")
         ld_row_1.addWidget(QtWidgets.QLabel("Ball Radius (m):"))
-        ld_row_1.addWidget(self.sld_lookdev_radius)
+        ld_row_1.addWidget(self.sld_splat_lookdev_radius)
         ld_row_1.addWidget(QtWidgets.QLabel("Stand Height (m):"))
-        ld_row_1.addWidget(self.sld_lookdev_height)
+        ld_row_1.addWidget(self.sld_splat_lookdev_height)
         lay.addRow("Lookdev Rig:", ld_row_1)
 
         ld_row_2 = QtWidgets.QHBoxLayout()
-        self.sld_lookdev_scale = SliderDoubleSpinBox(0.2, 10.0, 0.1, 1.0, decimals=2)
-        self.sld_lookdev_scale.setToolTip("Global scale multiplier for the entire lookdev verification rig.")
-        self.chk_lookdev_macbeth = QtWidgets.QCheckBox("Macbeth Chart")
-        self.chk_lookdev_macbeth.setChecked(True)
-        self.chk_lookdev_white = QtWidgets.QCheckBox("White Ball")
-        self.chk_lookdev_white.setChecked(True)
+        self.sld_splat_lookdev_scale = SliderDoubleSpinBox(0.2, 10.0, 0.1, 1.0, decimals=2)
+        self.sld_splat_lookdev_scale.setToolTip("Global scale multiplier for the entire lookdev verification rig.")
+        self.chk_splat_lookdev_macbeth = QtWidgets.QCheckBox("Macbeth Chart")
+        self.chk_splat_lookdev_macbeth.setChecked(True)
+        self.chk_splat_lookdev_white = QtWidgets.QCheckBox("White Ball")
+        self.chk_splat_lookdev_white.setChecked(True)
 
-        self.btn_update_lookdev = QtWidgets.QPushButton("🎯 Update Lookdev Rig")
-        self.btn_update_lookdev.setStyleSheet(
+        self.btn_splat_update_lookdev = QtWidgets.QPushButton("🎯 Update Lookdev Rig")
+        self.btn_splat_update_lookdev.setStyleSheet(
             "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 5px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #9b59b6; }"
         )
-        self.btn_update_lookdev.setToolTip("Update or respawn the Lookdev Verification Rig in /stage with current dimensions and tripod stand.")
-        self.btn_update_lookdev.clicked.connect(self._update_lookdev_rig_clicked)
+        self.btn_splat_update_lookdev.setToolTip("Update or respawn the Lookdev Verification Rig in /stage with current dimensions and tripod stand.")
+        self.btn_splat_update_lookdev.clicked.connect(self._update_lookdev_rig_clicked)
 
         ld_row_2.addWidget(QtWidgets.QLabel("Rig Scale:"))
-        ld_row_2.addWidget(self.sld_lookdev_scale)
-        ld_row_2.addWidget(self.chk_lookdev_macbeth)
-        ld_row_2.addWidget(self.chk_lookdev_white)
-        ld_row_2.addWidget(self.btn_update_lookdev)
+        ld_row_2.addWidget(self.sld_splat_lookdev_scale)
+        ld_row_2.addWidget(self.chk_splat_lookdev_macbeth)
+        ld_row_2.addWidget(self.chk_splat_lookdev_white)
+        ld_row_2.addWidget(self.btn_splat_update_lookdev)
         lay.addRow("Lookdev Sizing:", ld_row_2)
 
     def _build_gaussian_splat_section(self):
@@ -4722,10 +4722,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 try:
                     from hdri_match_solaris import lop_lookdev
                     lookdev_r = float(self.sld_lookdev_radius.value()) if hasattr(self, 'sld_lookdev_radius') else 0.15
-                    lookdev_h = float(self.sld_lookdev_height.value()) if hasattr(self, 'sld_lookdev_height') else 1.2
-                    lookdev_s = float(self.sld_lookdev_scale.value()) if hasattr(self, 'sld_lookdev_scale') else 1.0
-                    inc_white = self.chk_lookdev_white.isChecked() if hasattr(self, 'chk_lookdev_white') else True
-                    inc_macbeth = self.chk_lookdev_macbeth.isChecked() if hasattr(self, 'chk_lookdev_macbeth') else True
+                    lookdev_h = float(self.sld_lookdev_height.value()) if hasattr(self, 'sld_lookdev_height') else 1.0
+                    lookdev_s = float(self.sld_splat_lookdev_scale.value()) if hasattr(self, 'sld_splat_lookdev_scale') else 1.0
+                    inc_white = self.chk_lookdev_white.isChecked() if hasattr(self, 'chk_lookdev_white') else False
+                    inc_macbeth = self.chk_splat_lookdev_macbeth.isChecked() if hasattr(self, 'chk_splat_lookdev_macbeth') else False
+                    inc_stand = self.chk_lookdev_stand.isChecked() if hasattr(self, 'chk_lookdev_stand') else True
 
                     lop_lookdev.create_lookdev_rig_node(
                         stage_node,
@@ -4736,7 +4737,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                         rig_scale=lookdev_s,
                         include_white=inc_white,
                         include_macbeth=inc_macbeth,
-                        include_stand=True,
+                        include_stand=inc_stand,
+                        lookdev_en=True,
                     )
                 except Exception as ex_ld:
                     print(f"[HDRI Match] Lookdev setup note: {ex_ld}")
@@ -5020,11 +5022,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             floor_y = float(self.sld_arch_floor_y.value()) if hasattr(self, 'sld_arch_floor_y') else 0.0
             pos_x = float(self.sld_probe_x.value()) if hasattr(self, 'sld_probe_x') else 0.0
             pos_z = float(self.sld_probe_z.value()) if hasattr(self, 'sld_probe_z') else 0.0
-            lookdev_r = float(self.sld_lookdev_radius.value()) if hasattr(self, 'sld_lookdev_radius') else 0.15
-            lookdev_h = float(self.sld_lookdev_height.value()) if hasattr(self, 'sld_lookdev_height') else 1.2
-            lookdev_s = float(self.sld_lookdev_scale.value()) if hasattr(self, 'sld_lookdev_scale') else 1.0
-            inc_white = self.chk_lookdev_white.isChecked() if hasattr(self, 'chk_lookdev_white') else True
-            inc_macbeth = self.chk_lookdev_macbeth.isChecked() if hasattr(self, 'chk_lookdev_macbeth') else True
+            lookdev_r = float(self.sld_splat_lookdev_radius.value()) if hasattr(self, 'sld_splat_lookdev_radius') else 0.15
+            lookdev_h = float(self.sld_splat_lookdev_height.value()) if hasattr(self, 'sld_splat_lookdev_height') else 1.2
+            lookdev_s = float(self.sld_splat_lookdev_scale.value()) if hasattr(self, 'sld_splat_lookdev_scale') else 1.0
+            inc_white = self.chk_splat_lookdev_white.isChecked() if hasattr(self, 'chk_splat_lookdev_white') else False
+            inc_macbeth = self.chk_splat_lookdev_macbeth.isChecked() if hasattr(self, 'chk_splat_lookdev_macbeth') else True
 
             ld_node = lop_lookdev.create_lookdev_rig_node(
                 stage_node,
@@ -5036,7 +5038,12 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 include_white=inc_white,
                 include_macbeth=inc_macbeth,
                 include_stand=True,
+                lookdev_en=True,
             )
+            self._merge_light_networks(notify_ui=False)
+            if ld_node:
+                ld_node.cook(force=True)
+                ld_node.setDisplayFlag(True)
             self.log(
                 f"Updated Lookdev Rig: Stand Height={lookdev_h:.2f}m, Ball Radius={lookdev_r:.2f}m, Scale={lookdev_s:.1f}x at Floor Y={floor_y:.2f}m",
                 "SUCCESS"
@@ -8132,23 +8139,70 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 else:
                     sun_node.bypass(True)
 
-            # 3. Lookdev calibration rig
+            # 3. Lookdev calibration rig (60 FPS interactive sync)
             if stage_node:
                 lookdev_node = stage_node.node("hdri_match_lookdev")
-                if p.get("lookdev_en", False):
+                lookdev_en = bool(p.get("lookdev_en", False))
+                if lookdev_en:
+                    from hdri_match_solaris import lop_lookdev
                     if lookdev_node is None and dome_node is not None:
-                        lookdev_node = stage_node.createNode("pythonscript", "hdri_match_lookdev")
+                        lookdev_node = lop_lookdev.create_lookdev_rig_node(
+                            stage_node,
+                            "hdri_match_lookdev",
+                            pos=(float(p.get("lookdev_pos_x", 0.0)), 0.0, float(p.get("lookdev_pos_z", 0.0))),
+                            radius=float(p.get("lookdev_radius", 0.15)),
+                            stand_height=float(p.get("lookdev_height", 1.0)),
+                            spacing=float(p.get("lookdev_spacing", 0.45)),
+                            include_white=bool(p.get("lookdev_white", False)),
+                            include_stand=bool(p.get("lookdev_stand", True)),
+                            include_macbeth=False,
+                            lookdev_en=True,
+                        )
                         self.log("Created /stage/hdri_match_lookdev node", "DETAIL")
+                        self._merge_light_networks(notify_ui=False)
                     if lookdev_node is not None:
                         lookdev_node.bypass(False)
-                        new_lookdev_code = _gen_lookdev_code(p)
-                        cur_code = lookdev_node.parm("python").eval()
-                        cur_inputs = lookdev_node.inputs()
-                        needs_wire = (len(cur_inputs) == 0 or cur_inputs[0] is None)
-                        if cur_code != new_lookdev_code or needs_wire:
-                            lookdev_node.parm("python").set(new_lookdev_code)
-                            self._merge_light_networks(notify_ui=False)
-                            lookdev_node.cook(force=True)
+                        has_spare = bool(lookdev_node.parm("sphere_radius"))
+                        if not has_spare:
+                            lookdev_node = lop_lookdev.create_lookdev_rig_node(
+                                stage_node,
+                                "hdri_match_lookdev",
+                                pos=(float(p.get("lookdev_pos_x", 0.0)), 0.0, float(p.get("lookdev_pos_z", 0.0))),
+                                radius=float(p.get("lookdev_radius", 0.15)),
+                                stand_height=float(p.get("lookdev_height", 1.0)),
+                                spacing=float(p.get("lookdev_spacing", 0.45)),
+                                include_white=bool(p.get("lookdev_white", False)),
+                                include_stand=bool(p.get("lookdev_stand", True)),
+                                include_macbeth=False,
+                                lookdev_en=True,
+                            )
+                        else:
+                            parms_to_sync = [
+                                ("pos_x", float(p.get("lookdev_pos_x", 0.0))),
+                                ("pos_z", float(p.get("lookdev_pos_z", 0.0))),
+                                ("stand_height", float(p.get("lookdev_height", 1.0))),
+                                ("sphere_radius", float(p.get("lookdev_radius", 0.15))),
+                                ("spacing", float(p.get("lookdev_spacing", 0.45))),
+                                ("include_stand", bool(p.get("lookdev_stand", True))),
+                                ("include_white", bool(p.get("lookdev_white", False))),
+                                ("lookdev_en", True),
+                            ]
+                            changed = False
+                            for pname, pval in parms_to_sync:
+                                parm = lookdev_node.parm(pname)
+                                if parm is not None:
+                                    cur_v = parm.eval()
+                                    if isinstance(pval, bool):
+                                        cur_v = bool(cur_v)
+                                    if cur_v != pval:
+                                        parm.set(pval)
+                                        changed = True
+                            cur_inputs = lookdev_node.inputs()
+                            needs_wire = (len(cur_inputs) == 0 or cur_inputs[0] is None)
+                            if needs_wire:
+                                self._merge_light_networks(notify_ui=False)
+                            if changed or needs_wire:
+                                lookdev_node.cook(force=True)
                 elif lookdev_node is not None:
                     lookdev_node.bypass(True)
 
@@ -10969,12 +11023,22 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             lookdev_en = bool(p.get("lookdev_en", False))
             lookdev_node = stage_node.node("hdri_match_lookdev")
             if lookdev_en:
-                if lookdev_node is None:
-                    lookdev_node = stage_node.createNode("pythonscript", "hdri_match_lookdev")
-                    self.log("Created native Solaris /stage/hdri_match_lookdev (lookdev rig)", "DETAIL")
-                lookdev_node.bypass(False)
-                lookdev_node.parm("python").set(_gen_lookdev_code(p))
-                lookdev_node.cook(force=True)
+                from hdri_match_solaris import lop_lookdev
+                lookdev_node = lop_lookdev.create_lookdev_rig_node(
+                    stage_node,
+                    "hdri_match_lookdev",
+                    pos=(float(p.get("lookdev_pos_x", 0.0)), 0.0, float(p.get("lookdev_pos_z", 0.0))),
+                    radius=float(p.get("lookdev_radius", 0.15)),
+                    stand_height=float(p.get("lookdev_height", 1.0)),
+                    spacing=float(p.get("lookdev_spacing", 0.45)),
+                    include_white=bool(p.get("lookdev_white", False)),
+                    include_stand=bool(p.get("lookdev_stand", True)),
+                    include_macbeth=False,
+                    lookdev_en=True,
+                )
+                if lookdev_node is not None:
+                    lookdev_node.bypass(False)
+                    lookdev_node.cook(force=True)
                 created_features.append("Lookdev Spheres")
             else:
                 if lookdev_node is not None:
@@ -11236,16 +11300,28 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.log("Action: Add Lookdev Spheres initiated...", "INFO")
         try:
             stage_node = self._get_stage_node()
-            lookdev_node = stage_node.node("hdri_match_lookdev")
-            if lookdev_node is None:
-                lookdev_node = stage_node.createNode("pythonscript", "hdri_match_lookdev")
-                self.log("Created /stage/hdri_match_lookdev node", "DETAIL")
+            if hasattr(self, 'grp_lookdev') and self.grp_lookdev:
+                self.grp_lookdev.setChecked(True)
 
             p = self._collect_parms()
-            lookdev_node.parm("python").set(_gen_lookdev_code(p))
+            from hdri_match_solaris import lop_lookdev
+            lookdev_node = lop_lookdev.create_lookdev_rig_node(
+                stage_node,
+                "hdri_match_lookdev",
+                pos=(float(p.get("lookdev_pos_x", 0.0)), 0.0, float(p.get("lookdev_pos_z", 0.0))),
+                radius=float(p.get("lookdev_radius", 0.15)),
+                stand_height=float(p.get("lookdev_height", 1.0)),
+                spacing=float(p.get("lookdev_spacing", 0.45)),
+                include_white=bool(p.get("lookdev_white", False)),
+                include_stand=bool(p.get("lookdev_stand", True)),
+                include_macbeth=False,
+                lookdev_en=True,
+            )
             self._merge_light_networks(notify_ui=False)
-            lookdev_node.cook(force=True)
-            lookdev_node.setDisplayFlag(True)
+            if lookdev_node is not None:
+                lookdev_node.bypass(False)
+                lookdev_node.cook(force=True)
+                lookdev_node.setDisplayFlag(True)
             stage_node.layoutChildren()
             self.log("Lookdev spheres created and display flag set successfully.", "SUCCESS")
         except Exception as e:
