@@ -1,0 +1,51 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# Temporary development & scratch scripts
+scratch/
+tests/scratch_output/
+*.log
+
+# Large binary archives & compressed dumps
+*.7z
+*.zip
+*.tar
+*.tar.gz
+*.rar
+
+# Houdini backup files & galleries
+*.hipbak
+*.bak
+scenes/backup/
+scenes/galleries/
+tests/galleries/
+
+# Large render dumps & intermediate EXR/HDR textures
+*.exr
+*.hdr
+*.tif
+*.tiff
+*.ass
+*.bgeo
+*.bgeo.sc
+*.usd[abc]
+!test_env.exr
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE & Editor caches
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Distribution build output
+dist/
+deploy/

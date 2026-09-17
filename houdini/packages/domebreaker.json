@@ -1,0 +1,23 @@
+{
+    "env": [
+        {
+            "DOMEBREAKER_ROOT": "E:/PROJECTS/DomeBreaker"
+        },
+        {
+            "HDRI_MATCH_SOLARIS_ROOT": "$DOMEBREAKER_ROOT"
+        },
+        {
+            "PYTHONPATH": {
+                "value": [
+                    "$DOMEBREAKER_ROOT/python"
+                ],
+                "method": "append"
+            }
+        }
+    ],
+    "path": [
+        "$DOMEBREAKER_ROOT/houdini"
+    ],
+    "houdini_version": ">= 19.5",
+    "description": "DomeBreaker - Solaris USD Lighting & Environment Suite"
+}

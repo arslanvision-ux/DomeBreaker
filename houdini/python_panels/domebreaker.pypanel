@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pythonPanelDocument>
+  <interface name="domebreaker_panel" label="DomeBreaker"
+             icon="LOP_light" help_url="">
+    <script><![CDATA[
+def _build_panel():
+    try:
+        import os, sys, hou
+        
+        # Ensure Crucible Light Studio is on sys.path and HDA is installed
+        crucible_root = os.environ.get("CRUCIBLE_LIGHT_STUDIO_ROOT", r"E:\PROJECTS\CrucibleLightStudio")
+        crucible_parent = os.path.dirname(crucible_root)
+        for p in [crucible_parent, crucible_root]:
+            if os.path.exists(p) and p not in sys.path:
+                sys.path.insert(0, p)
+                
+        hda_file = os.path.join(crucible_root, "hda", "crucible_light_studio.hda")
+        if os.path.exists(hda_file):
+            try:
+                hou.hda.installFile(hda_file)
+            except Exception:
+                pass
+                
+        import hdri_match_solaris.panel_ui
+        return hdri_match_solaris.panel_ui.createInterface()
+    except Exception as e:
+        import traceback
+        try:
+            from PySide6 import QtWidgets
+        except ImportError:
+            from PySide2 import QtWidgets
+        err_box = QtWidgets.QTextEdit()
+        err_box.setReadOnly(True)
+        err_box.setStyleSheet("background-color: #2b0000; color: #ff7777; font-family: monospace; font-size: 13px;")
+        err_box.setText("DomeBreaker Panel Load Error:\n\n" + traceback.format_exc())
+        return err_box
+
+def onCreateInterface():
+    return _build_panel()
+
+def createInterface():
+    return _build_panel()
+]]></script>
+    <includeInToolbarMenu menu_position="800" create_separator="true"/>
+    <help><![CDATA[
+DomeBreaker
+
+Solaris USD Lighting & Environment Suite.
+Interactive physical sun relighting, multi-light extraction, ground projection parallax,
+chromatic plate calibration, and Crucible Light Studio integration.
+]]></help>
+  </interface>
+</pythonPanelDocument>
