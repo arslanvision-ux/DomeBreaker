@@ -1,6 +1,6 @@
 # DomeBreaker - Installation Guide (Windows & Linux)
 
-This guide covers both **1-Click Automatic Installation** and **Manual Installation** for **Houdini 19.5, 20.0, 20.5, and 21.0+** on Windows and Linux.
+This guide covers both **1-Click Automatic Installation** and **Manual Installation** for **Houdini 20.0, 20.5, and 21.0+** on Windows and Linux.
 
 ---
 
@@ -59,7 +59,7 @@ Create a file named `domebreaker.json` inside the `packages` directory with the 
     "path": [
         "$DOMEBREAKER_ROOT/houdini"
     ],
-    "houdini_version": ">= 19.5",
+    "houdini_version": ">= 20.0",
     "description": "DomeBreaker - Solaris USD Lighting & Environment Suite"
 }
 ```

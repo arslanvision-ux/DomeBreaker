@@ -100,7 +100,7 @@ for hpref in "$HOME"/houdini* "$HOME"/.houdini*; do
     "path": [
         "\$DOMEBREAKER_ROOT/houdini"
     ],
-    "houdini_version": ">= 19.5",
+    "houdini_version": ">= 20.0",
     "description": "DomeBreaker - Solaris USD Lighting & Environment Suite"
 }
 EOF

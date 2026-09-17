@@ -46,8 +46,44 @@ def get_project_root():
     return os.path.normpath(root).replace("\\", "/")
 
 
+def _is_supported_houdini_version(ver_str):
+    """Return True if the version string is Houdini 20.0 or newer."""
+    if not ver_str:
+        return False
+    try:
+        parts = ver_str.split(".")
+        major = float(parts[0] + "." + parts[1]) if len(parts) >= 2 else float(parts[0])
+        return major >= 20.0
+    except Exception:
+        return False
+
+
+def cleanup_legacy_versions():
+    """Remove any old DomeBreaker package descriptors from unsupported Houdini versions (< 20.0)."""
+    home = os.path.expanduser("~")
+    legacy_roots = [
+        os.path.join(home, "Documents"),
+        os.path.join(home, "OneDrive", "Documents"),
+        home,
+    ]
+    for c_root in legacy_roots:
+        if os.path.isdir(c_root):
+            for match in glob.glob(os.path.join(c_root, "houdini*")):
+                base = os.path.basename(match)
+                ver_str = base.replace("houdini", "").strip()
+                if ver_str and not _is_supported_houdini_version(ver_str):
+                    for pkg in ["domebreaker.json", "hdri_match_solaris.json"]:
+                        old_f = os.path.join(match, "packages", pkg)
+                        if os.path.isfile(old_f):
+                            try:
+                                os.remove(old_f)
+                                print(f"[INFO] Cleaned up legacy package descriptor: {old_f}")
+                            except Exception:
+                                pass
+
+
 def find_houdini_user_dirs():
-    """Find all Houdini preference directories for the current user."""
+    """Find all supported Houdini preference directories (Houdini 20.0, 20.5, 21.0+)."""
     home = os.path.expanduser("~")
     dirs = []
     system = platform.system()
@@ -64,7 +100,7 @@ def find_houdini_user_dirs():
                     if os.path.isdir(match):
                         base = os.path.basename(match)
                         ver_str = base.replace("houdini", "").strip()
-                        if ver_str and ver_str[0].isdigit():
+                        if ver_str and _is_supported_houdini_version(ver_str):
                             dirs.append(os.path.normpath(match))
 
     elif system == "Linux":
@@ -73,14 +109,15 @@ def find_houdini_user_dirs():
                 if os.path.isdir(match):
                     base = os.path.basename(match).lstrip(".")
                     ver_str = base.replace("houdini", "").strip()
-                    if ver_str and ver_str[0].isdigit():
+                    if ver_str and _is_supported_houdini_version(ver_str):
                         dirs.append(os.path.normpath(match))
 
     elif system == "Darwin":
         mac_pref = os.path.join(home, "Library", "Preferences", "houdini")
         if os.path.isdir(mac_pref):
             for match in glob.glob(os.path.join(mac_pref, "*")):
-                if os.path.isdir(match) and os.path.basename(match)[0].isdigit():
+                base = os.path.basename(match)
+                if os.path.isdir(match) and _is_supported_houdini_version(base):
                     dirs.append(os.path.normpath(match))
 
     env_pref = os.environ.get("HOUDINI_USER_PREF_DIR")
@@ -125,7 +162,7 @@ def generate_package_json(project_root):
         "path": [
             "$DOMEBREAKER_ROOT/houdini"
         ],
-        "houdini_version": ">= 19.5",
+        "houdini_version": ">= 20.0",
         "description": "DomeBreaker - Solaris USD Lighting & Environment Suite"
     }
 
@@ -135,6 +172,8 @@ def install(target_dir=None):
     print("=" * 65)
     print("   [DomeBreaker] Solaris USD Suite Installer")
     print("=" * 65)
+
+    cleanup_legacy_versions()
 
     root = get_project_root()
     print(f"[INFO] DomeBreaker Root: {root}")
@@ -207,6 +246,8 @@ def uninstall(target_dir=None):
     print("=" * 65)
     print("   [DomeBreaker] Solaris USD Suite Uninstaller")
     print("=" * 65)
+
+    cleanup_legacy_versions()
 
     pref_dirs = [target_dir] if target_dir else find_houdini_user_dirs()
     if not pref_dirs:
