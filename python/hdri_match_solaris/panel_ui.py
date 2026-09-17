@@ -10386,8 +10386,18 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 self._baked_sat = 1.0
                 self._baked_contrast = 1.0
             self.log(f"Loading HDRI: {path}...", "INFO")
-            from hdri_match.io.loader import load_exr_to_numpy
-            arr = load_exr_to_numpy(path)
+            arr = None
+            try:
+                from hdri_match.io.loader import load_exr_to_numpy
+                arr = load_exr_to_numpy(path)
+            except Exception:
+                try:
+                    from hdri_match_solaris.oiio_adapter import load_image_with_oiio
+                    arr = load_image_with_oiio(path)
+                except Exception as e:
+                    self.log_error(f"Error loading HDRI preview from {path}: {e}")
+                    return
+
             if arr is None:
                 self.log_error(f"Failed reading HDRI array from {path}")
                 return
