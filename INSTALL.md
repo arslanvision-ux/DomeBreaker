@@ -1,10 +1,10 @@
-﻿# DomeBreaker - Installation Guide (Windows & Linux)
+# DomeBreaker - Installation Guide (Windows & Linux)
 
 This guide covers both **1-Click Automatic Installation** and **Manual Installation** for **Houdini 19.5, 20.0, 20.5, and 21.0+** on Windows and Linux.
 
 ---
 
-## Option 1: 1-Click Automatic Installation (Recommended)
+## ⚡ Option 1: 1-Click Automatic Installation (Recommended)
 
 ### Windows
 1. Open the downloaded or cloned `DomeBreaker` folder.
@@ -24,7 +24,7 @@ This guide covers both **1-Click Automatic Installation** and **Manual Installat
 
 ---
 
-## Option 2: Manual Installation (For TDs & Custom Studio Pipelines)
+## 🛠️ Option 2: Manual Installation (For TDs & Custom Studio Pipelines)
 
 If you prefer manual setup or are deploying via studio environment modules, follow these steps:
 
@@ -67,7 +67,7 @@ Create a file named `domebreaker.json` inside the `packages` directory with the 
 
 ---
 
-## Updating DomeBreaker (Command-Line Auto-Updater)
+## 🔄 Updating DomeBreaker (Command-Line Auto-Updater)
 
 Whenever a new version or fix is released on GitHub:
 
@@ -84,10 +84,37 @@ The updater automatically checks the repository (`https://github.com/arslanvisio
 
 ---
 
-## Verifying Installation in Houdini
+## 🗑️ Uninstallation
+
+If DomeBreaker is already installed, running the installer (`install.bat` / `install.sh`) automatically detects the existing installation and offers an option to **Uninstall** or **Reinstall/Update**.
+
+Alternatively, you can uninstall directly with a single click:
+
+### Windows:
+* Double-click **`uninstall.bat`** (or run `python scripts/install.py --uninstall`).
+
+### Linux:
+* Run in terminal:
+  ```bash
+  chmod +x uninstall.sh
+  ./uninstall.sh
+  ```
+  *(or `python3 scripts/install.py --uninstall`)*
+
+### Manual Uninstallation:
+Simply delete `domebreaker.json` from your Houdini `packages` directory:
+* **Windows**: `C:\Users\<username>\Documents\houdiniX.Y\packages\domebreaker.json`
+* **Linux**: `~/.houdiniX.Y/packages/domebreaker.json` or `~/houdiniX.Y/packages/domebreaker.json`
+
+Your custom scenes, plates, and Houdini preferences remain 100% untouched.
+
+---
+
+## 🚀 Verifying Installation in Houdini
 
 1. Launch **Houdini** (Solaris / LOPS desktop recommended).
 2. Look at the top shelf tabs: you will see the **DomeBreaker** shelf tab.
 3. Click the **DomeBreaker** shelf tool to launch the UI panel.
 4. Alternatively, you can open it anytime from the menu bar:
-   **Windows** -> **Python Panel** -> **DomeBreaker**.
+   **Windows** $\rightarrow$ **Python Panel** $\rightarrow$ **DomeBreaker**.
+

@@ -4,31 +4,37 @@ setlocal enabledelayedexpansion
 title DomeBreaker - Windows Installer
 
 echo =================================================================
-echo    [+] DomeBreaker - Solaris USD Suite Installer (Windows)
+echo    ⚡ DomeBreaker - Solaris USD Suite Installer (Windows)
 echo =================================================================
 echo.
 
 set "SCRIPT_DIR=%~dp0"
+:: Remove trailing slash
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+
+:: Normalize path to forward slashes for Houdini JSON
 set "FORWARD_DIR=%SCRIPT_DIR:\=/%"
 
 echo [INFO] Installation Directory: %SCRIPT_DIR%
 echo.
 
+:: 1. Try python in PATH
 where python >nul 2>nul
 if %errorlevel% equ 0 (
     echo [INFO] Found Python in PATH. Running installer...
-    python "%SCRIPT_DIR%\scripts\install.py"
+    python "%SCRIPT_DIR%\scripts\install.py" %*
     goto :done
 )
 
+:: 2. Try py launcher
 where py >nul 2>nul
 if %errorlevel% equ 0 (
     echo [INFO] Found Python Launcher (py). Running installer...
-    py "%SCRIPT_DIR%\scripts\install.py"
+    py "%SCRIPT_DIR%\scripts\install.py" %*
     goto :done
 )
 
+:: 3. Try finding hython in standard SideFX install directory
 echo [INFO] Python not found in system PATH. Searching for Houdini hython...
 set "HYTHON_EXE="
 for /d %%H in ("C:\Program Files\Side Effects Software\Houdini*") do (
@@ -39,13 +45,30 @@ for /d %%H in ("C:\Program Files\Side Effects Software\Houdini*") do (
 
 if defined HYTHON_EXE (
     echo [INFO] Found Houdini Python: "!HYTHON_EXE!"
-    "!HYTHON_EXE!" "%SCRIPT_DIR%\scripts\install.py"
+    "!HYTHON_EXE!" "%SCRIPT_DIR%\scripts\install.py" %*
     goto :done
 )
 
+:: 4. Fallback: Pure batch package installer if Python is completely missing
 echo [INFO] Running pure batch package installation...
-set "COUNT=0"
 
+:: Check if already installed in any folder
+set "FOUND_EXISTING=0"
+for /d %%D in ("%USERPROFILE%\Documents\houdini*" "%USERPROFILE%\OneDrive\Documents\houdini*") do (
+    if exist "%%D\packages\domebreaker.json" set "FOUND_EXISTING=1"
+)
+
+if "!FOUND_EXISTING!"=="1" (
+    echo [INFO] Existing DomeBreaker installation detected.
+    echo [1] Reinstall / Update (default)
+    echo [2] Uninstall DomeBreaker
+    echo [3] Cancel
+    set /p "USER_CHOICE=Enter choice [1/2/3] (default: 1): "
+    if "!USER_CHOICE!"=="2" goto :do_uninstall
+    if "!USER_CHOICE!"=="3" goto :done
+)
+
+set "COUNT=0"
 for /d %%D in ("%USERPROFILE%\Documents\houdini*" "%USERPROFILE%\OneDrive\Documents\houdini*") do (
     if exist "%%D" (
         set "PKG_DIR=%%D\packages"
@@ -85,14 +108,27 @@ for /d %%D in ("%USERPROFILE%\Documents\houdini*" "%USERPROFILE%\OneDrive\Docume
 if %COUNT% gtr 0 (
     echo.
     echo =================================================================
-    echo [SUCCESS] DomeBreaker installed successfully into %COUNT% Houdini version(s)!
+    echo 🎉 DomeBreaker installed successfully into %COUNT% Houdini version(s)!
     echo =================================================================
 ) else (
     echo [WARNING] No Houdini preference folders detected in Documents.
     echo Please ensure Houdini has been run at least once on this machine.
 )
+goto :done
+
+:do_uninstall
+set "UNINSTALLED=0"
+for /d %%D in ("%USERPROFILE%\Documents\houdini*" "%USERPROFILE%\OneDrive\Documents\houdini*") do (
+    if exist "%%D\packages\domebreaker.json" (
+        del /f /q "%%D\packages\domebreaker.json"
+        echo [SUCCESS] Removed: %%D\packages\domebreaker.json
+        set /a UNINSTALLED+=1
+    )
+)
+echo =================================================================
+echo 🎉 DomeBreaker uninstalled from %UNINSTALLED% Houdini version(s).
+echo =================================================================
 
 :done
 echo.
-echo Press any key to exit...
-pause >nul
+pause

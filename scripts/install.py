@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
 =============================================================================
-DomeBreaker - Automated Package Installer for Windows & Linux
+DomeBreaker - Automated Package Installer & Uninstaller (Windows & Linux)
 =============================================================================
 Detects installed Houdini versions (19.5, 20.0, 20.5, 21.0+), generates a clean
 Houdini package descriptor pointing directly to this DomeBreaker installation,
 and registers the DomeBreaker shelf and Solaris Python panel.
 
+If DomeBreaker is already installed, provides an interactive option to
+Reinstall/Update or Uninstall.
+
 Usage:
-    python scripts/install.py
-    or run install.bat (Windows) / install.sh (Linux)
+    python scripts/install.py                 # Interactive (prompts if already installed)
+    python scripts/install.py --install       # Direct install/update
+    python scripts/install.py --uninstall     # Direct uninstall
+    or run install.bat / uninstall.bat (Windows)
+    or run install.sh / uninstall.sh (Linux)
 =============================================================================
 """
 
@@ -18,6 +24,7 @@ import sys
 import json
 import glob
 import platform
+import argparse
 
 
 def get_project_root():
@@ -44,13 +51,11 @@ def find_houdini_user_dirs():
                 for match in glob.glob(os.path.join(c_root, "houdini*")):
                     if os.path.isdir(match):
                         base = os.path.basename(match)
-                        # Filter out non-versioned or backup folders
                         ver_str = base.replace("houdini", "").strip()
-                        if ver_str and (ver_str[0].isdigit()):
+                        if ver_str and ver_str[0].isdigit():
                             dirs.append(os.path.normpath(match))
 
     elif system == "Linux":
-        # Check ~/houdiniX.Y and ~/.houdiniX.Y
         for pattern in [os.path.join(home, "houdini*"), os.path.join(home, ".houdini*")]:
             for match in glob.glob(pattern):
                 if os.path.isdir(match):
@@ -66,14 +71,24 @@ def find_houdini_user_dirs():
                 if os.path.isdir(match) and os.path.basename(match)[0].isdigit():
                     dirs.append(os.path.normpath(match))
 
-    # Also check HOUDINI_USER_PREF_DIR if set
     env_pref = os.environ.get("HOUDINI_USER_PREF_DIR")
     if env_pref and os.path.isdir(env_pref) and os.path.normpath(env_pref) not in dirs:
         dirs.append(os.path.normpath(env_pref))
 
-    # Sort so newest versions come first (e.g. 21.0, 20.5, 20.0)
     dirs = sorted(list(set(dirs)), reverse=True)
     return dirs
+
+
+def find_existing_installations(pref_dirs):
+    """Find existing DomeBreaker package descriptor files."""
+    found = []
+    for p_dir in pref_dirs:
+        packages_dir = os.path.join(p_dir, "packages")
+        for pkg_name in ["domebreaker.json", "hdri_match_solaris.json"]:
+            pkg_file = os.path.join(packages_dir, pkg_name)
+            if os.path.isfile(pkg_file):
+                found.append(pkg_file)
+    return found
 
 
 def generate_package_json(project_root):
@@ -114,7 +129,6 @@ def install(target_dir=None):
     print(f"[INFO] Operating System: {platform.system()} ({platform.machine()})")
     print(f"[INFO] Python: {platform.python_version()} ({sys.executable})")
 
-    # Validate essential structure
     req_paths = [
         os.path.join(root, "python", "hdri_match_solaris"),
         os.path.join(root, "houdini", "toolbar"),
@@ -133,7 +147,7 @@ def install(target_dir=None):
         print("Houdini packages folder (e.g. ~/houdini20.5/packages/ or Documents/houdini20.5/packages/).")
         return False
 
-    print(f"\n[INFO] Found {len(pref_dirs)} Houdini preference directory(ies):")
+    print(f"\n[INFO] Target Houdini preference directory(ies):")
     for p in pref_dirs:
         print(f"  • {p}")
 
@@ -162,7 +176,7 @@ def install(target_dir=None):
 
     print("\n" + "=" * 65)
     if installed_count > 0:
-        print(f"🎉 DomeBreaker successfully installed into {installed_count} Houdini version(s)!")
+        print(f"🎉 DomeBreaker successfully registered into {installed_count} Houdini version(s)!")
         print("=" * 65)
         print("\nNext Steps:")
         print("1. Launch Houdini (or restart if already running).")
@@ -176,7 +190,99 @@ def install(target_dir=None):
         return False
 
 
+def uninstall(target_dir=None):
+    """Execute uninstallation by removing package descriptors from Houdini preference folders."""
+    print("=" * 65)
+    print("   🗑️  DomeBreaker - Solaris USD Suite Uninstaller")
+    print("=" * 65)
+
+    pref_dirs = [target_dir] if target_dir else find_houdini_user_dirs()
+    if not pref_dirs:
+        print("[WARNING] No Houdini preference directories detected to uninstall from.")
+        return False
+
+    existing = find_existing_installations(pref_dirs)
+    if not existing:
+        print("[INFO] DomeBreaker does not appear to be installed in any detected Houdini directory.")
+        return True
+
+    removed_count = 0
+    for pkg_file in existing:
+        try:
+            os.remove(pkg_file)
+            print(f"[SUCCESS] Removed package descriptor: {pkg_file}")
+            removed_count += 1
+        except Exception as e:
+            print(f"[ERROR] Failed to remove {pkg_file}: {e}")
+
+    print("\n" + "=" * 65)
+    if removed_count > 0:
+        print(f"🎉 DomeBreaker successfully uninstalled from {removed_count} Houdini version(s)!")
+        print("=" * 65)
+        print("Your custom scenes, plates, and Houdini user preferences were preserved untouched.")
+        return True
+    else:
+        print("[WARNING] Could not remove package descriptors.")
+        return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description="DomeBreaker Package Installer / Uninstaller")
+    parser.add_argument("--install", "-i", action="store_true", help="Force install or update")
+    parser.add_argument("--uninstall", "-u", action="store_true", help="Uninstall DomeBreaker")
+    parser.add_argument("--target", "-t", type=str, default=None, help="Specific Houdini preference directory")
+    args = parser.parse_args()
+
+    # Direct flag invocations
+    if args.uninstall:
+        success = uninstall(args.target)
+        sys.exit(0 if success else 1)
+
+    if args.install:
+        success = install(args.target)
+        sys.exit(0 if success else 1)
+
+    # Interactive flow
+    pref_dirs = [args.target] if args.target else find_houdini_user_dirs()
+    existing = find_existing_installations(pref_dirs)
+
+    if existing:
+        print("=" * 65)
+        print("   ⚡ DomeBreaker - Solaris USD Suite Manager")
+        print("=" * 65)
+        print(f"[INFO] Existing DomeBreaker installation(s) detected:")
+        for ep in existing:
+            print(f"  • {ep}")
+        print("\nDomeBreaker is already installed. What would you like to do?")
+        print("  [1] Reinstall / Update package registration (default)")
+        print("  [2] Uninstall DomeBreaker from Houdini")
+        print("  [3] Cancel & Exit")
+        print("-" * 65)
+
+        # Check if running interactively
+        if sys.stdin.isatty():
+            try:
+                choice = input("Enter choice [1/2/3] (default: 1): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nOperation cancelled.")
+                sys.exit(0)
+        else:
+            # Non-interactive fallback (e.g. headless script)
+            choice = "1"
+
+        if choice == "2":
+            success = uninstall(args.target)
+            sys.exit(0 if success else 1)
+        elif choice == "3":
+            print("\nOperation cancelled. No changes were made.")
+            sys.exit(0)
+        else:
+            success = install(args.target)
+            sys.exit(0 if success else 1)
+    else:
+        success = install(args.target)
+        sys.exit(0 if success else 1)
+
+
 if __name__ == "__main__":
-    target = sys.argv[1] if len(sys.argv) > 1 else None
-    success = install(target)
-    sys.exit(0 if success else 1)
+    main()

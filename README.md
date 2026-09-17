@@ -114,6 +114,12 @@ Native automated shader network generation across major production render delega
 
 *For detailed manual installation instructions or studio TD module deployments, see [INSTALL.md](INSTALL.md).*
 
+### 🗑️ Uninstallation
+If DomeBreaker is already installed:
+* Running **`install.bat`** / **`install.sh`** automatically detects existing installations and prompts to **Uninstall** or **Reinstall/Update**.
+* Direct 1-click uninstall: double-click **`uninstall.bat`** (Windows) or run **`./uninstall.sh`** (Linux).
+* Manual: Simply delete `domebreaker.json` from your Houdini `packages` directory.
+
 ---
 
 ## 🔄 Instant Updates (Command-Line)
