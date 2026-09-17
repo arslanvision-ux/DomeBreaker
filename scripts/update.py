@@ -24,6 +24,18 @@ import zipfile
 import subprocess
 import tempfile
 
+# Force UTF-8 output on Windows consoles to prevent cp1251/cp1252 charmap errors
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 GITHUB_REPO = "arslanvision-ux/DomeBreaker"
 GITHUB_API_COMMITS = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
 GITHUB_ZIP_URL = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
@@ -61,7 +73,7 @@ def update_via_git(root):
         # Check status
         status_out = subprocess.check_output(["git", "status", "-uno"], cwd=root).decode("utf-8")
         if "Your branch is up to date" in status_out:
-            print("\n🎉 DomeBreaker is already up to date with the latest release!")
+            print("\n[SUCCESS] DomeBreaker is already up to date with the latest release!")
             return True, "Up to date"
 
         # Pull
@@ -71,7 +83,7 @@ def update_via_git(root):
             # Fallback to standard pull
             pull_res = subprocess.run(["git", "pull", "origin", "main"], cwd=root, check=True)
 
-        print("\n🎉 DomeBreaker successfully updated via Git!")
+        print("\n[SUCCESS] DomeBreaker successfully updated via Git!")
         return True, "Updated"
     except Exception as e:
         print(f"[WARNING] Git update encountered an issue: {e}")
@@ -162,14 +174,14 @@ def update_via_zip(root):
                 shutil.copy2(s_f, d_f)
 
         print("\n" + "=" * 65)
-        print("🎉 DomeBreaker successfully updated to the latest GitHub version!")
+        print("[SUCCESS] DomeBreaker successfully updated to the latest GitHub version!")
         print("=" * 65)
         return True
 
 
 def run_update():
     print("=" * 65)
-    print("   ⚡ DomeBreaker - Command-Line Auto-Updater")
+    print("   [DomeBreaker] Command-Line Auto-Updater")
     print("=" * 65)
 
     root = get_project_root()

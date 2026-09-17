@@ -26,6 +26,18 @@ import glob
 import platform
 import argparse
 
+# Force UTF-8 output on Windows consoles to prevent cp1251/cp1252 charmap errors
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 
 def get_project_root():
     """Return the absolute path of the DomeBreaker project root."""
@@ -121,7 +133,7 @@ def generate_package_json(project_root):
 def install(target_dir=None):
     """Execute the installation."""
     print("=" * 65)
-    print("   ⚡ DomeBreaker - Solaris USD Suite Installer")
+    print("   [DomeBreaker] Solaris USD Suite Installer")
     print("=" * 65)
 
     root = get_project_root()
@@ -149,7 +161,7 @@ def install(target_dir=None):
 
     print(f"\n[INFO] Target Houdini preference directory(ies):")
     for p in pref_dirs:
-        print(f"  • {p}")
+        print(f"  * {p}")
 
     pkg_data = generate_package_json(root)
     pkg_json_str = json.dumps(pkg_data, indent=4) + "\n"
@@ -176,7 +188,7 @@ def install(target_dir=None):
 
     print("\n" + "=" * 65)
     if installed_count > 0:
-        print(f"🎉 DomeBreaker successfully registered into {installed_count} Houdini version(s)!")
+        print(f"[SUCCESS] DomeBreaker successfully registered into {installed_count} Houdini version(s)!")
         print("=" * 65)
         print("\nNext Steps:")
         print("1. Launch Houdini (or restart if already running).")
@@ -186,14 +198,14 @@ def install(target_dir=None):
         print("\nHappy Lookdev & Lighting!")
         return True
     else:
-        print("❌ Installation failed.")
+        print("[ERROR] Installation failed.")
         return False
 
 
 def uninstall(target_dir=None):
     """Execute uninstallation by removing package descriptors from Houdini preference folders."""
     print("=" * 65)
-    print("   🗑️  DomeBreaker - Solaris USD Suite Uninstaller")
+    print("   [DomeBreaker] Solaris USD Suite Uninstaller")
     print("=" * 65)
 
     pref_dirs = [target_dir] if target_dir else find_houdini_user_dirs()
@@ -217,7 +229,7 @@ def uninstall(target_dir=None):
 
     print("\n" + "=" * 65)
     if removed_count > 0:
-        print(f"🎉 DomeBreaker successfully uninstalled from {removed_count} Houdini version(s)!")
+        print(f"[SUCCESS] DomeBreaker successfully uninstalled from {removed_count} Houdini version(s)!")
         print("=" * 65)
         print("Your custom scenes, plates, and Houdini user preferences were preserved untouched.")
         return True
@@ -248,27 +260,25 @@ def main():
 
     if existing:
         print("=" * 65)
-        print("   ⚡ DomeBreaker - Solaris USD Suite Manager")
+        print("   [DomeBreaker] Solaris USD Suite Manager")
         print("=" * 65)
         print(f"[INFO] Existing DomeBreaker installation(s) detected:")
         for ep in existing:
-            print(f"  • {ep}")
+            print(f"  * {ep}")
         print("\nDomeBreaker is already installed. What would you like to do?")
         print("  [1] Reinstall / Update package registration (default)")
         print("  [2] Uninstall DomeBreaker from Houdini")
         print("  [3] Cancel & Exit")
         print("-" * 65)
 
-        # Check if running interactively
-        if sys.stdin.isatty():
-            try:
-                choice = input("Enter choice [1/2/3] (default: 1): ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\nOperation cancelled.")
-                sys.exit(0)
-        else:
-            # Non-interactive fallback (e.g. headless script)
-            choice = "1"
+        choice = "1"
+        try:
+            val = input("Enter choice [1/2/3] (default: 1): ").strip()
+            digits = "".join(c for c in val if c.isdigit())
+            if digits:
+                choice = digits[0]
+        except (EOFError, KeyboardInterrupt):
+            pass
 
         if choice == "2":
             success = uninstall(args.target)
