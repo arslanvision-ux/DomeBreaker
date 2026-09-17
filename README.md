@@ -3,11 +3,27 @@
 > **Solaris USD Lighting, HDRI Dissection & Environment Reconstruction Suite for SideFX Houdini**
 
 [![Version](https://img.shields.io/badge/version-v1.0.0--beta.1-blue.svg)](VERSION)
+[![Status](https://img.shields.io/badge/status-Active%20Beta%20Testing-brightgreen.svg)](#beta-testing--continuous-updates)
 [![Houdini](https://img.shields.io/badge/Houdini-19.5%20%7C%2020.0%20%7C%2020.5%20%7C%2021.0%2B-orange.svg)](https://www.sidefx.com/)
+[![Renderers](https://img.shields.io/badge/Renderers-Karma%20%7C%20Arnold%20%7C%20Redshift-red.svg)](#multi-renderer-usd-support)
 [![OS](https://img.shields.io/badge/OS-Windows%20%7C%20Linux-green.svg)](#installation)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](LICENSE)
 
 DomeBreaker is a production-grade Houdini Solaris (LOPs) USD suite designed for VFX lookdev artists, lighters, and lighting TDs. It solves the classic limitations of traditional panoramic dome lights by breaking 360-degree HDRIs into physically plausible CG lighting rigs: extracting physical suns, detecting practical light sources, inpainting textures, solving interior room dimensions, projecting seamless parallax box rooms, and verifying calibration against ground-truth plates.
+
+---
+
+## 🧪 Beta Testing & Continuous Updates
+
+DomeBreaker is currently in **Active Beta Testing (`v1.0.0-beta.1`)**. 
+
+We are continuously updating this tool with performance optimizations, feature refinements, and bug fixes based on real-world production feedback from lighting and lookdev artists. 
+
+> **⚡ Seamless In-Place Updates**: You never have to redownload the whole package manually! Whenever a new update is released, simply run:
+> * **Windows**: Double-click `update.bat`
+> * **Linux**: Run `./update.sh`
+> 
+> The tool will pull the latest updates directly from GitHub in seconds without touching any of your local scenes or preferences.
 
 ---
 
@@ -26,20 +42,23 @@ DomeBreaker is a production-grade Houdini Solaris (LOPs) USD suite designed for 
   - Interactive multi-pass OpenCV / OpenImageIO diffuse texture inpainting that cleanly paints out emissive sources from the dome.
 
 - **Seamless Interior Room Reconstruction (Parallax Box Projection)**:
-  - **Step 1**: Analyze room physical dimensions and camera height directly from the HDRI.
-  - **Step 2**: Auto-align the room orientation to the environment's dominant architectural axes.
-  - **Step 3**: Apply solved dimensions to build a calibrated USD projection box with corrected UV textures, wall seams, and ground floor alignment.
+  - **Step 1: Analyze Room Boundaries**: Solves the physical ceiling height, floor plane, and perimeter wall dimensions from the panoramic projection.
+  - **Step 2: Auto-Align Room to HDRI**: Solves the optimal rotation offset ($\Delta\text{Yaw}$) to align the room box with coordinate axes and practical light positions.
+  - **Step 3: Apply Solved Dimensions & Align Room Box**: Builds the calibrated USD box mesh, projects seamless textures onto walls/floor/ceiling, and positions practical lights at their exact 3D ceiling coordinates with true camera parallax.
 
 - **3D Gaussian Splat Ingestion & Lookdev**:
   - Load and render `.ply` Gaussian Splats inside Solaris alongside USD geometry and materials.
   - Native lookdev turntable rigs with Macbeth color checkers, chrome spheres, and 18% neutral grey balls.
 
-- **Multi-Renderer USD Compatibility**:
-  - Fully compatible with **Karma (CPU & XPU)**, **Arnold (HtoA)**, **Redshift**, **RenderMan**, and **V-Ray**.
+- **Multi-Renderer USD Support**:
+  - Production-ready USD material & lighting setup for:
+    * **SideFX Karma** (CPU & XPU)
+    * **Autodesk Arnold** (HtoA)
+    * **Maxon Redshift**
 
 ---
 
-## Installation
+## Installation (Windows & Linux)
 
 DomeBreaker supports **Windows** and **Linux** with 1-click automated installers and manual package setups.
 
@@ -98,12 +117,12 @@ If you manage environments via studio modules or custom package paths, create `d
 
 ---
 
-## Updating DomeBreaker (Command-Line Auto-Updater)
+## Updating DomeBreaker (In-Place Auto-Updater)
 
-When new features or bug fixes are pushed to the repository, you do **not** need to redownload the package or reconfigure Houdini.
+Because DomeBreaker is in active beta testing, updates will be pushed frequently:
 
 ### Windows:
-Simply double-click **`update.bat`** (or run `python scripts/update.py`).
+Double-click **`update.bat`** (or run `python scripts/update.py`).
 
 ### Linux:
 Run in your terminal:
@@ -111,10 +130,9 @@ Run in your terminal:
 ./update.sh
 ```
 
-### How the updater works:
 - **Git clones**: Runs `git fetch` and `git pull --ff-only` from `origin main`.
-- **Standalone ZIP downloads**: Connects to the GitHub API, queries the latest commit, downloads the clean release files, and updates your installation in-place.
-- **Scene Safety**: The updater only replaces core tool files; your project files, custom scenes, and local preferences remain completely untouched.
+- **Standalone ZIP downloads**: Connects to the GitHub API, queries the latest commit, downloads the updated files, and updates your installation in-place.
+- **Scene Safety**: The updater only replaces tool scripts; your custom scenes, project files, and preferences are never touched.
 
 ---
 
@@ -128,20 +146,8 @@ Run in your terminal:
 
 ---
 
-## Workflow Guide: Room Reconstruction
+## Support & Beta Feedback
 
-For optimal room reconstruction and practical light alignment, follow this standard 3-step sequence in the **Room Reconstruction** tab:
-
-1. **Step 1: Analyze Room Boundaries**:
-   Detects the ceiling height, floor plane, and perimeter wall dimensions from the panoramic projection.
-2. **Step 2: Auto-Align Room to HDRI**:
-   Solves the optimal rotation offset ($\Delta\text{Yaw}$) to align the room box with the coordinate grid and practical light positions.
-3. **Step 3: Apply Solved Dimensions & Align Room Box**:
-   Builds the USD box mesh, projects seamless textures onto walls/floor/ceiling, and positions extracted practical lights at their exact 3D ceiling coordinates.
-
----
-
-## Support & Bug Reports
-
-For beta testing feedback, bug reports, and feature requests, please submit an issue on GitHub:
-https://github.com/arslanvision-ux/DomeBreaker/issues
+If you encounter any edge cases, bugs, or have feature requests during your testing:
+- **Submit an Issue on GitHub**: https://github.com/arslanvision-ux/DomeBreaker/issues
+- **Discussions & Feedback**: Share your test renders and suggestions!
