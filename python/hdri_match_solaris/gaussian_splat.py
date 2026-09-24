@@ -1457,7 +1457,7 @@ class GaussianSplatBaker:
     @staticmethod
     def bake_planar_room_textures(hdri_source, room_data, output_dir,
                                   probe_pos=None, resolution_floor=2048, resolution_walls=2048,
-                                  progress_callback=None):
+                                  yaw=0.0, progress_callback=None):
         """
         Bake flat rectilinear OpenEXR texture maps for the floor, ceiling, and 4 perimeter walls
         from an equirectangular HDRI image (or albedo map) at up to 8K (8192x8192) resolution.
@@ -1469,6 +1469,7 @@ class GaussianSplatBaker:
             probe_pos: (X, Y, Z) capture origin. Defaults to (center_x, floor_y + 1.45, center_z).
             resolution_floor: Width and height for floor and ceiling textures (e.g. 2048, 4096, 8192).
             resolution_walls: Width for wall textures (height will be scaled proportionally, e.g. 2048, 4096, 8192).
+            yaw: Relative rotation angle in degrees around Y-axis between the room box and HDRI.
             progress_callback: Optional callable(percent, message).
 
         Returns:
@@ -1540,11 +1541,20 @@ class GaussianSplatBaker:
             dx = pos[..., 0] - cam_x
             dy = pos[..., 1] - cam_y
             dz = pos[..., 2] - cam_z
-            dist = np.maximum(np.sqrt(dx*dx + dy*dy + dz*dz), 1e-4)
+            if abs(yaw) > 1e-4:
+                rot_rad = math.radians(yaw)
+                cos_y = math.cos(rot_rad)
+                sin_y = math.sin(rot_rad)
+                rx = cos_y * dx + sin_y * dz
+                ry = dy
+                rz = -sin_y * dx + cos_y * dz
+            else:
+                rx, ry, rz = dx, dy, dz
+            dist = np.maximum(np.sqrt(rx*rx + ry*ry + rz*rz), 1e-4)
 
             # Match OpenUSD DomeLight latlong mapping (-Z center u=0.5, +X u=0.75, -X u=0.25, +Z u=0.0/1.0)
-            u_eq = (np.arctan2(-dx, dz) / (2.0 * np.pi)) % 1.0
-            v_eq = 0.5 - (np.arcsin(np.clip(dy / dist, -1.0, 1.0)) / np.pi)
+            u_eq = (np.arctan2(-rx, rz) / (2.0 * np.pi)) % 1.0
+            v_eq = 0.5 - (np.arcsin(np.clip(ry / dist, -1.0, 1.0)) / np.pi)
             return _sample_eq(hdri_arr, u_eq, v_eq)
 
         def _save_surface(tex, sname):

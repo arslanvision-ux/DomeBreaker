@@ -202,6 +202,7 @@ class SliderDoubleSpinBox(QtWidgets.QWidget):
     rescales the slider range to accommodate any dynamic range without clamping.
     """
     valueChanged = QtCore.Signal(float)
+    sliderReleased = QtCore.Signal()
 
     def __init__(self, min_val=0.0, max_val=1.0, step=0.01, default_val=0.0, decimals=2, parent=None):
         super().__init__(parent)
@@ -257,6 +258,8 @@ class SliderDoubleSpinBox(QtWidgets.QWidget):
 
         self.slider.valueChanged.connect(self._on_slider_changed)
         self.spin.valueChanged.connect(self._on_spin_changed)
+        self.slider.sliderReleased.connect(self.sliderReleased.emit)
+        self.spin.editingFinished.connect(self.sliderReleased.emit)
 
     def _on_slider_changed(self, ival):
         val = ival / max(1.0, self._scale)
@@ -2258,6 +2261,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         # 2. Modern Tabbed Workflow Interface
         self.tabs_splat = QtWidgets.QTabWidget()
+        self.tabs_splat.setDocumentMode(True)
+        self.tabs_splat.tabBar().setExpanding(True)
         self.tabs_splat.setStyleSheet("""
             QTabWidget::pane {
                 border: 1px solid #2d313a;
@@ -2274,6 +2279,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 border-top-right-radius: 4px;
                 font-weight: bold;
                 font-size: 11px;
+                text-align: center;
             }
             QTabBar::tab:selected {
                 background-color: #2c313a;
@@ -6985,16 +6991,81 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         align_btn_box = QtWidgets.QHBoxLayout()
         btn_align_room = QtWidgets.QPushButton("📐 Auto-Fit Room Box Dimensions")
         btn_align_room.setStyleSheet("background-color: #2b3a4a; color: #58a6ff; font-weight: bold; padding: 4px; border-radius: 4px;")
-        btn_align_room.setToolTip("Automatically analyze the equirectangular panorama to solve physical room width, depth, and height without rotating yaw.")
+        btn_align_room.setToolTip("Automatically analyze the equirectangular panorama to solve physical room width, depth, and height.")
         btn_align_room.clicked.connect(self._on_auto_align_room_to_hdri)
         align_btn_box.addWidget(btn_align_room, 2)
 
-        btn_reset_yaw = QtWidgets.QPushButton("🔄 Reset Yaw (0°)")
+        btn_align_yaw = QtWidgets.QPushButton("🧭 Align Room Yaw")
+        btn_align_yaw.setStyleSheet("background-color: #1f3d3d; color: #73daca; font-weight: bold; padding: 4px; border-radius: 4px;")
+        btn_align_yaw.setToolTip("Analyze the HDRI to detect the dominant room wall angles and rotate Room & Dome yaw to align with the room.")
+        btn_align_yaw.clicked.connect(self._on_auto_align_room_yaw)
+        align_btn_box.addWidget(btn_align_yaw, 2)
+
+        btn_reset_yaw = QtWidgets.QPushButton("🔄 Reset (0°)")
         btn_reset_yaw.setStyleSheet("background-color: #333333; color: #e6e6e6; font-weight: bold; padding: 4px; border-radius: 4px;")
         btn_reset_yaw.setToolTip("Reset room orientation (yaw) to 0.0° to align directly with the native HDRI panorama coordinates.")
         btn_reset_yaw.clicked.connect(self._on_reset_room_yaw)
         align_btn_box.addWidget(btn_reset_yaw, 1)
         room_lay.addRow("", align_btn_box)
+
+        # Room Box Yaw Rotation slider with quick 90° step buttons and link toggle
+        yaw_row = QtWidgets.QHBoxLayout()
+        self.sld_room_yaw = SliderDoubleSpinBox(0.0, 360.0, 1.0, 0.0, decimals=1)
+        self.sld_room_yaw.setToolTip(
+            "Rotate the 3D room box independently from the HDRI DomeLight (0° - 360°).\n"
+            "The HDRI camera projection dynamically updates in real time to match the rotated room.\n"
+            "Use this to line up hallway corridors or room walls with the physical space in the HDRI."
+        )
+        self.sld_room_yaw.valueChanged.connect(self._on_room_yaw_changed)
+        if hasattr(self.sld_room_yaw, 'sliderReleased'):
+            self.sld_room_yaw.sliderReleased.connect(self._on_room_yaw_released)
+        yaw_row.addWidget(self.sld_room_yaw, 3)
+
+        btn_yaw_m90 = QtWidgets.QPushButton("-90°")
+        btn_yaw_m90.setStyleSheet("padding: 2px 4px; font-weight: bold;")
+        btn_yaw_m90.setToolTip("Rotate room box -90° (turn hallway direction).")
+        btn_yaw_m90.clicked.connect(lambda: self._step_room_yaw(-90.0))
+        yaw_row.addWidget(btn_yaw_m90, 1)
+
+        btn_yaw_p90 = QtWidgets.QPushButton("+90°")
+        btn_yaw_p90.setStyleSheet("padding: 2px 4px; font-weight: bold;")
+        btn_yaw_p90.setToolTip("Rotate room box +90° (turn hallway direction).")
+        btn_yaw_p90.clicked.connect(lambda: self._step_room_yaw(90.0))
+        yaw_row.addWidget(btn_yaw_p90, 1)
+
+        btn_yaw_180 = QtWidgets.QPushButton("180°")
+        btn_yaw_180.setStyleSheet("padding: 2px 4px; font-weight: bold;")
+        btn_yaw_180.setToolTip("Flip room box 180°.")
+        btn_yaw_180.clicked.connect(lambda: self._step_room_yaw(180.0))
+        yaw_row.addWidget(btn_yaw_180, 1)
+
+        btn_yaw_reset = QtWidgets.QPushButton("0°")
+        btn_yaw_reset.setStyleSheet("padding: 2px 4px; font-weight: bold;")
+        btn_yaw_reset.setToolTip("Reset room box yaw to 0°.")
+        btn_yaw_reset.clicked.connect(lambda: self._step_room_yaw(0.0, absolute=True))
+        yaw_row.addWidget(btn_yaw_reset, 1)
+
+        room_lay.addRow("Room Box Yaw:", yaw_row)
+
+        yaw_opts_row = QtWidgets.QHBoxLayout()
+        self.chk_link_room_dome_yaw = QtWidgets.QCheckBox("🔗 Link to DomeLight Yaw")
+        self.chk_link_room_dome_yaw.setChecked(False)
+        self.chk_link_room_dome_yaw.setToolTip(
+            "When unchecked (default), rotating Room Box Yaw rotates only the 3D room geometry,\n"
+            "allowing you to orient the room box to the hallway while the HDRI background stays stationary.\n"
+            "When checked, rotating either slider keeps Room Yaw and DomeLight Yaw synchronized in 1:1 lockstep."
+        )
+        self.chk_auto_rebake_planar = QtWidgets.QCheckBox("Auto-Rebake Planar on Release")
+        self.chk_auto_rebake_planar.setChecked(False)
+        self.chk_auto_rebake_planar.setToolTip(
+            "When in Planar High-Detail mode, automatically re-bake the 6 planar rectilinear\n"
+            "surface maps when releasing the Room Box Yaw slider."
+        )
+        self.chk_auto_rebake_planar.toggled.connect(self._on_auto_rebake_planar_toggled)
+        yaw_opts_row.addWidget(self.chk_link_room_dome_yaw)
+        yaw_opts_row.addWidget(self.chk_auto_rebake_planar)
+        yaw_opts_row.addStretch()
+        room_lay.addRow("", yaw_opts_row)
 
         self.sld_room_width = SliderDoubleSpinBox(1.0, 200.0, 0.5, 8.0, decimals=2)
         self.sld_room_width.setToolTip("Room dimension along X-axis in meters.")
@@ -7339,21 +7410,30 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         """Bake high-resolution planar rectilinear textures for floor, ceiling, and walls in Ground & Room projection."""
         hdri_path = getattr(self, '_current_calibrated_path', None)
         if not hdri_path or not os.path.isfile(hdri_path):
-            if hasattr(self, 'txt_hdri') and self.txt_hdri.text().strip() and os.path.isfile(self.txt_hdri.text().strip()):
-                hdri_path = self.txt_hdri.text().strip()
+            if hasattr(self, 'txt_hdri') and self.txt_hdri.text().strip():
+                clean_t = self.txt_hdri.text().strip().strip('"\'')
+                if os.path.isfile(clean_t):
+                    hdri_path = clean_t
+
+        if not hdri_path or not os.path.isfile(hdri_path):
+            cand = getattr(self, '_last_hdri_texture', None) or getattr(self, '_current_raw_hdri_path', None)
+            if cand and os.path.isfile(cand):
+                hdri_path = cand
 
         if not hdri_path or not os.path.isfile(hdri_path):
             stage_node = self._get_stage_node()
             if stage_node:
-                dome_node = stage_node.node("hdri_dome")
-                if dome_node:
-                    for p_name in ["inputs:texture:file", "xn__inputstexturefile_r3ah", "texture"]:
-                        p_parm = dome_node.parm(p_name)
-                        if p_parm and p_parm.evalAsString():
-                            cand = p_parm.evalAsString().replace("\\", "/")
-                            if os.path.isfile(cand):
-                                hdri_path = cand
-                                break
+                for c in stage_node.children():
+                    if "dome" in c.name().lower() or c.type().name() in ("domelight", "pxrdomelight"):
+                        for p_name in ["inputs:texture:file", "xn__inputstexturefile_r3ah", "texture"]:
+                            p_parm = c.parm(p_name)
+                            if p_parm and p_parm.evalAsString():
+                                cand = p_parm.evalAsString().replace("\\", "/").strip('"\'')
+                                if os.path.isfile(cand):
+                                    hdri_path = cand
+                                    break
+                    if hdri_path and os.path.isfile(hdri_path):
+                        break
 
         if not hdri_path or not os.path.isfile(hdri_path):
             self.log("Please select or load an HDRI texture first before baking planar textures.", "WARNING")
@@ -7376,7 +7456,12 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             hip_dir = os.path.expanduser("~")
 
         hdri_base = os.path.splitext(os.path.basename(hdri_path))[0]
-        planar_dir = os.path.join(hip_dir, "hdri_match", f"planar_textures_{hdri_base}_{pres}").replace("\\", "/")
+        dome_yaw = float(self.sld_yaw.value()) if hasattr(self, 'sld_yaw') else 0.0
+        room_yaw = float(self.sld_room_yaw.value()) if hasattr(self, 'sld_room_yaw') else dome_yaw
+        rel_yaw = round((room_yaw - dome_yaw) % 360.0, 1)
+        yaw_tag = f"_yaw{int(rel_yaw * 10)}" if abs(rel_yaw) > 1e-3 else ""
+
+        planar_dir = os.path.join(hip_dir, "hdri_match", f"planar_textures_{hdri_base}_{pres}{yaw_tag}").replace("\\", "/")
         os.makedirs(planar_dir, exist_ok=True)
 
         room_w = float(self.sld_room_width.value()) if hasattr(self, 'sld_room_width') else 8.0
@@ -7404,16 +7489,19 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             from hdri_match_solaris.gaussian_splat import GaussianSplatBaker
             hdri_source, was_inpainted = self._get_inpainted_hdri_source(hdri_path, planar_dir=planar_dir)
             inpaint_note = " (with practical lights painted out)" if was_inpainted else ""
-            self.log(f"Baking 6 planar rectilinear surface textures ({pres}x{pres}) from {os.path.basename(hdri_path)}{inpaint_note}...", "INFO")
+            yaw_note = f" at relative yaw {rel_yaw}°" if abs(rel_yaw) > 1e-3 else ""
+            self.log(f"Baking 6 planar rectilinear surface textures ({pres}x{pres}) from {os.path.basename(hdri_path)}{yaw_note}{inpaint_note}...", "INFO")
             if hasattr(self, 'pbar_ground_planar'):
                 self.pbar_ground_planar.setVisible(True)
                 self.pbar_ground_planar.setValue(10)
                 self.pbar_ground_planar.setFormat(f"Baking Planar Maps ({pres}x{pres})...")
+            QtWidgets.QApplication.processEvents()
 
             def _on_progress(pct, msg):
                 if hasattr(self, 'pbar_ground_planar'):
                     self.pbar_ground_planar.setValue(pct)
                     self.pbar_ground_planar.setFormat(msg)
+                QtWidgets.QApplication.processEvents()
 
             self._ground_planar_textures = GaussianSplatBaker.bake_planar_room_textures(
                 hdri_source=hdri_source,
@@ -7422,13 +7510,16 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 probe_pos=probe_pos,
                 resolution_floor=pres,
                 resolution_walls=pres,
+                yaw=rel_yaw,
                 progress_callback=_on_progress,
             )
             if hasattr(self, 'pbar_ground_planar'):
                 self.pbar_ground_planar.setValue(100)
                 self.pbar_ground_planar.setFormat(f"Planar Ready ({pres}x{pres})")
+            QtWidgets.QApplication.processEvents()
             self.log(f"Baked {len(self._ground_planar_textures)} planar textures ({pres}x{pres}) successfully!", "SUCCESS")
             self._create_or_update_ground_projection(notify_ui=True)
+            self._sync_node()
         except Exception as ex:
             self.log_error(f"Planar texture bake failed: {ex}", ex)
             if hou.isUIAvailable():
@@ -7478,13 +7569,21 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.sld_extract_dist.setToolTip("Distance in meters of practical RectLights from center (used in outdoor/ground mode or manual override).")
         lay.addRow("Distance (m):", self.sld_extract_dist)
 
+        snap_row = QtWidgets.QHBoxLayout()
         self.chk_snap_to_room = QtWidgets.QCheckBox("Snap to Room Box Walls & Ceiling (Interior Mode)")
         self.chk_snap_to_room.setChecked(True)
         self.chk_snap_to_room.setToolTip(
             "When in Interior Room Box mode, automatically raytraces light directions to room walls and ceiling,\n"
             "positioning rect lights directly on room surfaces and sizing them to the exact physical window/fixture scale."
         )
-        lay.addRow(self.chk_snap_to_room)
+        snap_row.addWidget(self.chk_snap_to_room, 3)
+
+        btn_snap_now = QtWidgets.QPushButton("🧲 Snap Now")
+        btn_snap_now.setStyleSheet("padding: 2px 6px; font-weight: bold;")
+        btn_snap_now.setToolTip("Force snap all practical lights to current room box walls and orientation immediately.")
+        btn_snap_now.clicked.connect(self._on_snap_lights_now)
+        snap_row.addWidget(btn_snap_now, 1)
+        lay.addRow(snap_row)
 
         self.sld_extract_intensity = SliderDoubleSpinBox(0.0, 100.0, 0.1, 1.0, decimals=2)
         self.sld_extract_intensity.setToolTip("Global intensity multiplier for all extracted practical rect lights.")
@@ -8660,8 +8759,21 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         if hasattr(self, 'sld_cam_offset_z'):
             self.sld_cam_offset_z.setValue(off_z)
 
+        # Preserve detected room yaw orientation if available
+        applied_yaw = 0.0
+        if hasattr(self, '_ana_last_result') and isinstance(self._ana_last_result, dict) and "yaw" in self._ana_last_result:
+            applied_yaw = round(float(self._ana_last_result["yaw"]) % 360.0, 1)
+        elif hasattr(self, 'sld_room_yaw') and abs(float(self.sld_room_yaw.value())) > 1e-4:
+            applied_yaw = float(self.sld_room_yaw.value())
+        elif hasattr(self, 'sld_yaw'):
+            applied_yaw = float(self.sld_yaw.value())
+
         if hasattr(self, 'sld_yaw'):
-            self.sld_yaw.setValue(0.0)
+            self.sld_yaw.setValue(applied_yaw)
+        if hasattr(self, 'sld_room_yaw'):
+            self.sld_room_yaw.blockSignals(True)
+            self.sld_room_yaw.setValue(applied_yaw)
+            self.sld_room_yaw.blockSignals(False)
 
         # 4. Sync node parameters and update stage geometry
         self._sync_node()
@@ -8670,7 +8782,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.lbl_ana_status.setText(f"✓ Applied to DomeBreaker: {w:.2f}m × {d:.2f}m × {h:.2f}m (Room Box active)")
         self.log(
             f"Transferred Room Dimensions to DomeBreaker: {w:.2f}m(W) x {d:.2f}m(D) x {h:.2f}m(H), "
-            f"Tripod: {tripod:.2f}m, Offsets: ({off_x:.2f}, {off_z:.2f})m, Yaw: 0.0°.",
+            f"Tripod: {tripod:.2f}m, Offsets: ({off_x:.2f}, {off_z:.2f})m, Yaw: {applied_yaw:.1f}°.",
             "SUCCESS"
         )
         if 'hou' in sys.modules and hasattr(hou, 'isUIAvailable') and hou.isUIAvailable():
@@ -8735,27 +8847,208 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 self.sld_cam_offset_x.setValue(res["cam_offset_x"])
             if hasattr(self, 'sld_cam_offset_z'):
                 self.sld_cam_offset_z.setValue(res["cam_offset_z"])
+            det_yaw = float(res.get("yaw", 0.0))
+            norm_yaw = round((det_yaw % 360.0), 1)
             if hasattr(self, 'sld_yaw'):
-                self.sld_yaw.setValue(0.0)
+                self.sld_yaw.setValue(norm_yaw)
+            if hasattr(self, 'sld_room_yaw'):
+                self.sld_room_yaw.blockSignals(True)
+                self.sld_room_yaw.setValue(norm_yaw)
+                self.sld_room_yaw.blockSignals(False)
 
             self._sync_node()
             self._create_or_update_ground_projection(notify_ui=True)
             conf = res.get("confidence", 80)
             self.log(
                 f"Auto-fitted Room Box to HDRI: {res['room_width']:.2f}m(W) × {res['room_depth']:.2f}m(D) × {res['room_height']:.2f}m(H), "
-                f"Yaw: 0.0° (native alignment)",
+                f"Yaw: {norm_yaw}° (aligned to detected walls)",
                 "SUCCESS"
             )
         except Exception as e:
             self.log_error("Auto-align room box failed", e)
 
+    def _on_auto_align_room_yaw(self):
+        """Analyze the equirectangular panorama to detect room wall orientation and rotate Yaw to align."""
+        img_input = None
+        if hasattr(self, '_hdri_thumb_raw') and self._hdri_thumb_raw is not None:
+            img_input = self._hdri_thumb_raw
+        elif hasattr(self, 'txt_hdri'):
+            fpath = self.txt_hdri.text().strip()
+            if fpath:
+                path_exp = hou.text.expandString(fpath) if 'hou' in sys.modules and hasattr(hou, 'text') else os.path.expandvars(fpath)
+                if os.path.isfile(path_exp):
+                    img_input = path_exp
+        if img_input is None:
+            self.log("Auto-Align Yaw: No valid HDRI loaded to analyze.", "WARNING")
+            if 'hou' in sys.modules and hasattr(hou, 'isUIAvailable') and hou.isUIAvailable():
+                hou.ui.displayMessage("Please load an HDRI map first before auto-aligning yaw.", severity=hou.severityType.Warning)
+            return
+        try:
+            from hdri_match_solaris import hdri_room_analyzer as _ana
+            tripod_h = float(self.sld_tripod_height.value()) if hasattr(self, 'sld_tripod_height') else 1.5
+            res = _ana.analyze_hdri_room(img_input, tripod_height=tripod_h)
+            det_yaw = float(res.get("yaw", 0.0))
+            norm_yaw = round((det_yaw % 360.0), 1)
+            if hasattr(self, 'sld_room_yaw'):
+                self.sld_room_yaw.blockSignals(True)
+                self.sld_room_yaw.setValue(norm_yaw)
+                self.sld_room_yaw.blockSignals(False)
+            if hasattr(self, 'chk_link_room_dome_yaw') and self.chk_link_room_dome_yaw.isChecked():
+                if hasattr(self, 'sld_yaw'):
+                    self.sld_yaw.setValue(norm_yaw)
+            if hasattr(self, 'btn_bake_ground_planar'):
+                self.btn_bake_ground_planar.setText(f"🎨 Re-bake Planar ({norm_yaw:.1f}°)")
+            self._sync_node()
+            self._create_or_update_ground_projection(notify_ui=True)
+            self.log(f"Auto-aligned Room Yaw to detected room wall orientation: {norm_yaw}°", "SUCCESS")
+        except Exception as e:
+            self.log_error("Auto-align room yaw failed", e)
+
+    def _on_room_yaw_changed(self, val):
+        """Handle real-time room yaw slider changes, updating projection in real time."""
+        if hasattr(self, 'btn_bake_ground_planar'):
+            self.btn_bake_ground_planar.setText(f"🎨 Re-bake Planar ({val:.1f}°)")
+
+        if hasattr(self, 'chk_link_room_dome_yaw') and self.chk_link_room_dome_yaw.isChecked():
+            if hasattr(self, 'sld_yaw') and abs(self.sld_yaw.value() - val) > 1e-4:
+                self.sld_yaw.setValue(val)
+        else:
+            self._sync_node()
+
+    def _on_dome_yaw_released(self):
+        """Called when DomeLight yaw slider is released."""
+        if hasattr(self, 'chk_auto_rebake_planar') and self.chk_auto_rebake_planar.isChecked():
+            self._on_room_yaw_released()
+
+    def _on_auto_rebake_planar_toggled(self, checked):
+        """When auto-rebake is enabled by the artist, immediately bake or verify planar maps for current orientation."""
+        if checked:
+            if hasattr(self, 'combo_ground_tex_mode') and self.combo_ground_tex_mode.currentIndex() != 0:
+                self.combo_ground_tex_mode.blockSignals(True)
+                self.combo_ground_tex_mode.setCurrentIndex(0)
+                self.combo_ground_tex_mode.blockSignals(False)
+                if hasattr(self, 'widget_ground_planar_opts'):
+                    self.widget_ground_planar_opts.setVisible(True)
+
+            dome_yaw = float(self.sld_yaw.value()) if hasattr(self, 'sld_yaw') else 0.0
+            room_yaw = float(self.sld_room_yaw.value()) if hasattr(self, 'sld_room_yaw') else dome_yaw
+            rel_yaw = round((room_yaw - dome_yaw) % 360.0, 1)
+
+            # Check if all 6 planar maps exist on disk
+            hdri_path = getattr(self, '_current_calibrated_path', None)
+            if not hdri_path or not os.path.isfile(hdri_path):
+                if hasattr(self, 'txt_hdri') and self.txt_hdri.text().strip():
+                    clean_t = self.txt_hdri.text().strip().strip('"\'')
+                    if os.path.isfile(clean_t):
+                        hdri_path = clean_t
+            if not hdri_path or not os.path.isfile(hdri_path):
+                cand = getattr(self, '_last_hdri_texture', None) or getattr(self, '_current_raw_hdri_path', None)
+                if cand and os.path.isfile(cand):
+                    hdri_path = cand
+            if not hdri_path or not os.path.isfile(hdri_path):
+                stage_node = self._get_stage_node()
+                if stage_node:
+                    for c in stage_node.children():
+                        if "dome" in c.name().lower() or c.type().name() in ("domelight", "pxrdomelight"):
+                            for p_name in ["inputs:texture:file", "xn__inputstexturefile_r3ah", "texture"]:
+                                p_parm = c.parm(p_name)
+                                if p_parm and p_parm.evalAsString():
+                                    cand = p_parm.evalAsString().replace("\\", "/").strip('"\'')
+                                    if os.path.isfile(cand):
+                                        hdri_path = cand
+                                        break
+                        if hdri_path and os.path.isfile(hdri_path):
+                            break
+
+            if not hdri_path or not os.path.isfile(hdri_path):
+                self.log("Auto-Rebake Planar enabled. Please load an HDRI texture to bake planar maps.", "INFO")
+                return
+
+            hdri_base = os.path.splitext(os.path.basename(hdri_path))[0]
+            res_txt = self.combo_ground_planar_res.currentText() if hasattr(self, 'combo_ground_planar_res') else "4K"
+            pres = 8192 if ("8K" in res_txt or "8192" in res_txt) else (4096 if ("4K" in res_txt or "4096" in res_txt) else (1024 if ("1K" in res_txt or "1024" in res_txt) else 2048))
+            hip_dir = hou.expandString("$HIP") if 'hou' in sys.modules and hasattr(hou, 'expandString') else "."
+            if not hip_dir or hip_dir == "." or "houdini_temp" in hip_dir:
+                hip_dir = os.path.expanduser("~")
+            yaw_tag = f"_yaw{int(rel_yaw * 10)}" if abs(rel_yaw) > 1e-3 else ""
+            planar_dir = os.path.join(hip_dir, "hdri_match", f"planar_textures_{hdri_base}_{pres}{yaw_tag}").replace("\\", "/")
+
+            has_all_maps = True
+            for s in ["floor", "ceiling", "wall_north", "wall_south", "wall_east", "wall_west"]:
+                found = False
+                for sfx in ["_diffuse.exr", "_albedo.exr"]:
+                    f = os.path.join(planar_dir, f"{s}{sfx}")
+                    if os.path.isfile(f) and os.path.getsize(f) > 0:
+                        found = True
+                        break
+                if not found:
+                    has_all_maps = False
+                    break
+
+            if not has_all_maps:
+                self.log(f"Auto-Rebake enabled: baking missing planar textures for orientation ({room_yaw:.1f}°)...", "INFO")
+                self._bake_ground_planar_textures_clicked()
+            else:
+                self.log(f"Auto-Rebake enabled: verified existing planar textures for orientation ({room_yaw:.1f}°).", "SUCCESS")
+                self._sync_node()
+
+    def _on_room_yaw_released(self):
+        """Called when room yaw slider is released or commit happens."""
+        val = float(self.sld_room_yaw.value()) if hasattr(self, 'sld_room_yaw') else 0.0
+        auto_rebake = hasattr(self, 'chk_auto_rebake_planar') and self.chk_auto_rebake_planar.isChecked()
+        if auto_rebake:
+            if hasattr(self, 'combo_ground_tex_mode') and self.combo_ground_tex_mode.currentIndex() != 0:
+                self.combo_ground_tex_mode.blockSignals(True)
+                self.combo_ground_tex_mode.setCurrentIndex(0)
+                self.combo_ground_tex_mode.blockSignals(False)
+                if hasattr(self, 'widget_ground_planar_opts'):
+                    self.widget_ground_planar_opts.setVisible(True)
+
+            self.log(f"Auto-rebaking planar rectilinear textures at new Room Yaw ({val:.1f}°)...", "INFO")
+            self._bake_ground_planar_textures_clicked()
+        else:
+            self._sync_node()
+
+    def _step_room_yaw(self, delta, absolute=False):
+        """Step room yaw by delta degrees (e.g. +90°, -90°, 180°) or set absolute value."""
+        cur = float(self.sld_room_yaw.value()) if hasattr(self, 'sld_room_yaw') else 0.0
+        new_val = round((delta % 360.0), 1) if absolute else round(((cur + delta) % 360.0), 1)
+        if hasattr(self, 'sld_room_yaw'):
+            self.sld_room_yaw.blockSignals(True)
+            self.sld_room_yaw.setValue(new_val)
+            self.sld_room_yaw.blockSignals(False)
+        if hasattr(self, 'btn_bake_ground_planar'):
+            self.btn_bake_ground_planar.setText(f"🎨 Re-bake Planar ({new_val:.1f}°)")
+        if hasattr(self, 'chk_link_room_dome_yaw') and self.chk_link_room_dome_yaw.isChecked():
+            if hasattr(self, 'sld_yaw'):
+                self.sld_yaw.setValue(new_val)
+        self._on_room_yaw_released()
+
     def _on_reset_room_yaw(self):
-        """Reset room yaw and DomeLight rotation back to 0.0° native alignment."""
-        if hasattr(self, 'sld_yaw'):
-            self.sld_yaw.setValue(0.0)
+        """Reset room yaw back to 0.0° native alignment."""
+        if hasattr(self, 'sld_room_yaw'):
+            self.sld_room_yaw.blockSignals(True)
+            self.sld_room_yaw.setValue(0.0)
+            self.sld_room_yaw.blockSignals(False)
+        if hasattr(self, 'btn_bake_ground_planar'):
+            self.btn_bake_ground_planar.setText("🎨 Bake Planar Textures")
+        if hasattr(self, 'chk_link_room_dome_yaw') and self.chk_link_room_dome_yaw.isChecked():
+            if hasattr(self, 'sld_yaw'):
+                self.sld_yaw.setValue(0.0)
         self._sync_node()
         self._create_or_update_ground_projection(notify_ui=True)
         self.log("Reset Room Box Yaw to 0.0° (native HDRI panorama alignment).", "SUCCESS")
+
+    def _on_snap_lights_now(self):
+        """Force synchronize and snap all practical lights to current room box walls/ceiling."""
+        if hasattr(self, 'chk_snap_to_room'):
+            self.chk_snap_to_room.setChecked(True)
+        self._sync_node()
+        stage_node = self._get_stage_node()
+        p_count = len([c for c in stage_node.children() if c.name().startswith("practical_")]) if stage_node else 0
+        self.log(f"Snapped {p_count} practical light(s) to room box surfaces at current room orientation.", "SUCCESS")
+        if 'hou' in sys.modules and hasattr(hou, 'ui') and hou.isUIAvailable():
+            hou.ui.setStatusMessage(f"Snapped {p_count} practical lights to room box surfaces.")
 
     def _on_hdri_dropped(self, path):
         """Handle file dropped directly onto HDRI target or preview."""
@@ -8831,6 +9124,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             if hasattr(self, extra_attr):
                 w = getattr(self, extra_attr)
                 w.valueChanged.connect(self._sync_node)
+
+        # Wire slider release for auto-rebaking planar textures on commit
+        if hasattr(self, 'sld_yaw'):
+            self.sld_yaw.sliderReleased.connect(self._on_dome_yaw_released)
+        for room_dim_attr in ['sld_room_width', 'sld_room_depth', 'sld_room_height', 'sld_tripod_height', 'sld_cam_offset_x', 'sld_cam_offset_z']:
+            if hasattr(self, room_dim_attr):
+                getattr(self, room_dim_attr).sliderReleased.connect(self._on_room_yaw_released)
 
         if hasattr(self, 'combo_ground_mat_mode'):
             self.combo_ground_mat_mode.currentIndexChanged.connect(self._on_renderer_target_changed)
@@ -9043,6 +9343,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 ry_parm = dome_node.parm("ry")
                 if ry_parm:
                     ry_parm.set(float(p.get("yaw", 0.0)))
+                if hasattr(self, 'chk_link_room_dome_yaw') and self.chk_link_room_dome_yaw.isChecked():
+                    if hasattr(self, 'sld_room_yaw') and abs(self.sld_room_yaw.value() - float(p.get("yaw", 0.0))) > 1e-4:
+                        self.sld_room_yaw.blockSignals(True)
+                        self.sld_room_yaw.setValue(float(p.get("yaw", 0.0)))
+                        self.sld_room_yaw.blockSignals(False)
 
                 # Color Temperature: if using baked map, only apply delta relative to baked temp
                 cur_temp = float(p.get("temp", 0.0))
@@ -9268,6 +9573,43 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     else:
                         p["hdri_texture"] = p.get("hdri_path", "").replace(chr(92), "/")
 
+                    # Check if baked planar maps exist on disk for the current relative yaw
+                    hip_dir = hou.expandString("$HIP") if 'hou' in sys.modules and hasattr(hou, 'expandString') else "."
+                    if not hip_dir or hip_dir == "." or "houdini_temp" in hip_dir:
+                        hip_dir = os.path.expanduser("~")
+                    hdri_tex_path = p.get("hdri_texture", "")
+                    hdri_base = os.path.splitext(os.path.basename(hdri_tex_path))[0] if hdri_tex_path else "room"
+                    pres = 4096
+                    res_txt = p.get("ground_planar_res", "4K")
+                    if "8K" in res_txt or "8192" in res_txt:
+                        pres = 8192
+                    elif "4K" in res_txt or "4096" in res_txt:
+                        pres = 4096
+                    elif "1K" in res_txt or "1024" in res_txt:
+                        pres = 1024
+                    else:
+                        pres = 2048
+
+                    dome_yaw = float(p.get("yaw", 0.0))
+                    room_yaw = float(p.get("room_yaw", dome_yaw))
+                    rel_yaw = round((room_yaw - dome_yaw) % 360.0, 1)
+                    yaw_tag = f"_yaw{int(rel_yaw * 10)}" if abs(rel_yaw) > 1e-3 else ""
+                    planar_dir = os.path.join(hip_dir, "hdri_match", f"planar_textures_{hdri_base}_{pres}{yaw_tag}").replace("\\", "/")
+
+                    existing_planar = {}
+                    if os.path.isdir(planar_dir):
+                        for sname in ["floor", "ceiling", "wall_north", "wall_south", "wall_east", "wall_west"]:
+                            for sfx in ["_diffuse.exr", "_albedo.exr"]:
+                                fpath = os.path.join(planar_dir, f"{sname}{sfx}").replace("\\", "/")
+                                if os.path.isfile(fpath) and os.path.getsize(fpath) > 0:
+                                    existing_planar[sname] = fpath
+                                    break
+                    if len(existing_planar) == 6:
+                        p["planar_textures"] = existing_planar
+                        self._ground_planar_textures = existing_planar
+                    else:
+                        p["planar_textures"] = {}
+
                     # Auto-create if enabled and not yet present on stage so artist gets instant live viewport feedback
                     if proj_node is None:
                         proj_node = stage_node.createNode("pythonscript", "hdri_match_projection")
@@ -9288,6 +9630,15 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                             self._merge_light_networks(notify_ui=False)
 
                         proj_node.cook(force=True)
+
+                        # Update hdri_match_materials if present downstream
+                        matlib_node = stage_node.node("hdri_match_materials")
+                        if matlib_node is not None and not matlib_node.isBypassed():
+                            matlib_func = _get_create_or_update_material_library()
+                            if matlib_func:
+                                matlib_func(stage_node, p)
+                                matlib_node.cook(force=True)
+
                         if hou.isUIAvailable():
                             hou.ui.triggerUpdate()
                 elif proj_node is not None:
@@ -9298,6 +9649,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 extract_en = p.get("extract_en", False)
                 cur_ev = float(p.get("ev", 0.0))
                 yaw = float(p.get("yaw", 0.0))
+                room_yaw = float(p.get("room_yaw", yaw))
                 dist_val = float(p.get("extract_dist", 10.0))
                 proj_mode = p.get("proj_mode", "ground_disc")
                 snap_to_room = bool(p.get("snap_to_room", True))
@@ -9324,17 +9676,50 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     el_str = p_node.userData("el_native")
                     tx_str = p_node.userData("theta_x")
                     ty_str = p_node.userData("theta_y")
-                    if phi_str and el_str and tx_str and ty_str:
+                    if not (phi_str and el_str):
+                        p_name = p_node.name()
+                        cached_items = getattr(self, '_extracted_practicals_data', []) or []
+                        for item in cached_items:
+                            if item.get("name") == p_name:
+                                phi_str = str(item.get("phi_native", 0.0))
+                                el_str = str(item.get("el_native", 0.0))
+                                tx_str = str(item.get("theta_x", math.radians(15.0)))
+                                ty_str = str(item.get("theta_y", math.radians(15.0)))
+                                p_node.setUserData("phi_native", phi_str)
+                                p_node.setUserData("el_native", el_str)
+                                p_node.setUserData("theta_x", tx_str)
+                                p_node.setUserData("theta_y", ty_str)
+                                break
+                    if not (phi_str and el_str):
+                        # Geometric recovery from existing node coordinates
+                        ntx = p_node.parm("tx").eval() if p_node.parm("tx") else 0.0
+                        nty = p_node.parm("ty").eval() if p_node.parm("ty") else 1.5
+                        ntz = p_node.parm("tz").eval() if p_node.parm("tz") else -10.0
+                        ndx = ntx - c_x
+                        ndy = nty - c_y
+                        ndz = ntz - c_z
+                        ndist = max(1e-4, math.sqrt(ndx*ndx + ndy*ndy + ndz*ndz))
+                        el_val = math.asin(max(-1.0, min(1.0, ndy / ndist)))
+                        phi_val = (math.atan2(-ndx, ndz) - math.radians(yaw)) % (2.0 * math.pi)
+                        th_x = math.radians(15.0)
+                        th_y = math.radians(15.0)
+                        p_node.setUserData("phi_native", str(phi_val))
+                        p_node.setUserData("el_native", str(el_val))
+                        p_node.setUserData("theta_x", str(th_x))
+                        p_node.setUserData("theta_y", str(th_y))
+                        phi_str = str(phi_val)
+                        el_str = str(el_val)
+                    if phi_str and el_str:
                         phi_val = float(phi_str)
                         el_val = float(el_str)
-                        th_x = float(tx_str)
-                        th_y = float(ty_str)
+                        th_x = float(tx_str) if tx_str else math.radians(15.0)
+                        th_y = float(ty_str) if ty_str else math.radians(15.0)
 
                         if proj_mode == "room_box" and snap_to_room:
                             (px, py, pz), eff_dist, new_w, new_h, normal, (new_rx, new_ry, new_rz) = _compute_room_light_placement(
                                 phi_val, el_val, th_x, th_y,
                                 room_w, room_d, room_h, c_x, c_y, c_z,
-                                yaw=yaw
+                                room_yaw=room_yaw, dome_yaw=yaw
                             )
                             is_snapped = True
                         else:
@@ -12291,6 +12676,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "temp": self.sld_temp.value(),
             "tint": self.sld_tint.value(),
             "yaw": self.sld_yaw.value(),
+            "room_yaw": self.sld_room_yaw.value() if hasattr(self, 'sld_room_yaw') else self.sld_yaw.value(),
+            "link_room_dome_yaw": self.chk_link_room_dome_yaw.isChecked() if hasattr(self, 'chk_link_room_dome_yaw') else False,
+            "auto_rebake_planar": self.chk_auto_rebake_planar.isChecked() if hasattr(self, 'chk_auto_rebake_planar') else False,
             "horizon_en": self.grp_horizon.isChecked(),
             "horizon_h": self.sld_horizon_height.value(),
             "horizon_f": self.sld_horizon_feather.value(),
@@ -13340,6 +13728,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             el_rad = (0.5 - v) * math.pi
             phi_rad = u * 2.0 * math.pi
             yaw = float(p.get("yaw", 0.0))
+            room_yaw = float(p.get("room_yaw", yaw))
 
             cos_el = math.cos(el_rad)
             sin_el = math.sin(el_rad)
@@ -13361,7 +13750,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 pos, eff_dist, width, height, normal, rot = _compute_room_light_placement(
                     phi_rad, el_rad, theta_x, theta_y,
                     room_w, room_d, room_h, c_x, c_y, c_z,
-                    yaw=yaw
+                    room_yaw=room_yaw, dome_yaw=yaw
                 )
                 rx, ry, rz = rot
                 is_snapped = True
@@ -13578,7 +13967,12 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
             hdri_tex_path = p.get("hdri_texture", "")
             hdri_base = os.path.splitext(os.path.basename(hdri_tex_path))[0] if hdri_tex_path else "room"
-            planar_dir = os.path.join(hip_dir, "hdri_match", f"planar_textures_{hdri_base}_{pres}").replace("\\", "/")
+            dome_yaw = float(p.get("yaw", 0.0))
+            room_yaw = float(p.get("room_yaw", dome_yaw))
+            rel_yaw = round((room_yaw - dome_yaw) % 360.0, 1)
+            yaw_tag = f"_yaw{int(rel_yaw * 10)}" if abs(rel_yaw) > 1e-3 else ""
+
+            planar_dir = os.path.join(hip_dir, "hdri_match", f"planar_textures_{hdri_base}_{pres}{yaw_tag}").replace("\\", "/")
             os.makedirs(planar_dir, exist_ok=True)
 
             needed_surfaces = ["floor", "ceiling", "wall_north", "wall_south", "wall_east", "wall_west"]
@@ -13604,7 +13998,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             elif hdri_tex_path and os.path.isfile(hdri_tex_path):
                 try:
                     inpaint_note = " (with practical lights painted out)" if was_inpainted else ""
-                    self.log(f"Auto-baking high-detail planar surface textures ({pres}x{pres}) for room box{inpaint_note}...", "INFO")
+                    yaw_note = f" at relative yaw {rel_yaw}°" if abs(rel_yaw) > 1e-3 else ""
+                    self.log(f"Auto-baking high-detail planar surface textures ({pres}x{pres}) for room box{yaw_note}{inpaint_note}...", "INFO")
                     if hasattr(self, 'pbar_ground_planar'):
                         self.pbar_ground_planar.setVisible(True)
                         self.pbar_ground_planar.setValue(20)
@@ -13645,6 +14040,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                         probe_pos=probe_pos,
                         resolution_floor=pres,
                         resolution_walls=pres,
+                        yaw=rel_yaw,
                         progress_callback=_on_prog,
                     )
                     p["planar_textures"] = self._ground_planar_textures
@@ -13752,9 +14148,20 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 else:
                     print(f"[HDRI Match] {mode_name} mesh created using {tex_name}.")
         except Exception as e:
-            self.log_error("Ground projection geometry creation failed", e)
+            node_errs = []
+            if proj_node is not None:
+                try:
+                    raw_errs = proj_node.errors()
+                    if raw_errs:
+                        node_errs = [str(er).strip() for er in raw_errs if str(er).strip()]
+                except Exception:
+                    pass
+            full_msg = str(e)
+            if node_errs:
+                full_msg += "\n\nNode Cook Errors:\n" + "\n".join(node_errs)
+            self.log_error(f"Ground projection geometry creation failed:\n{full_msg}", e)
             if notify_ui and hou.isUIAvailable():
-                hou.ui.displayMessage(f"Ground projection error:\n{e}", severity=hou.severityType.Error)
+                hou.ui.displayMessage(f"Ground projection error:\n{full_msg}", severity=hou.severityType.Error)
 
     def _jump_to_material_library(self):
         """Focus on and select the hdri_match_materials Material Library node in Houdini's Network Editor."""
@@ -14220,17 +14627,30 @@ def _gen_sun_code(p):
     return "\n".join(lines)
 
 
-def _compute_room_light_placement(az_or_phi, el_rad, theta_x, theta_y, room_w, room_d, room_h, cam_x=0.0, cam_y=1.5, cam_z=0.0, yaw=0.0, margin=0.08):
+def _compute_room_light_placement(az_or_phi, el_rad, theta_x, theta_y, room_w, room_d, room_h, cam_x=0.0, cam_y=1.5, cam_z=0.0, yaw=0.0, margin=0.08, room_yaw=None, dome_yaw=None):
     """Raytrace an emitter direction from camera inside a room box in local room space,
     find physical wall/ceiling surface intersection, distance, aperture size, surface normal,
     and then transform position and Euler rotation angles into world space matching the room's yaw rotation."""
     import math
+    if room_yaw is None:
+        room_yaw = float(yaw)
+    else:
+        room_yaw = float(room_yaw)
+    if dome_yaw is None:
+        dome_yaw = float(yaw)
+    else:
+        dome_yaw = float(dome_yaw)
+
+    # Relative azimuth between room orientation and HDRI dome orientation
+    rel_rad = math.radians(room_yaw - dome_yaw)
+    az_room = az_or_phi + rel_rad
+
     cos_el = math.cos(el_rad)
     sin_el = math.sin(el_rad)
     # Local direction inside the room box (OpenUSD latlong convention: u=0.25 is -X/West, u=0.75 is +X/East, u=0.5 is -Z/North)
-    dx = -cos_el * math.sin(az_or_phi)
+    dx = -cos_el * math.sin(az_room)
     dy = sin_el
-    dz = cos_el * math.cos(az_or_phi)
+    dz = cos_el * math.cos(az_room)
 
     x_min, x_max = -room_w * 0.5, room_w * 0.5
     z_min, z_max = -room_d * 0.5, room_d * 0.5
@@ -14292,7 +14712,7 @@ def _compute_room_light_placement(az_or_phi, el_rad, theta_x, theta_y, room_w, r
             if x_min - 1e-3 <= px <= x_max + 1e-3 and y_min - 1e-3 <= py <= y_max + 1e-3:
                 candidates.append((tz, "front", (0.0, 0.0, -1.0), (0.0, 0.0, 0.0), px, py, z_max))
 
-    psi = math.radians(yaw)
+    psi = math.radians(room_yaw)
     cos_y = math.cos(psi)
     sin_y = math.sin(psi)
 
@@ -14310,7 +14730,7 @@ def _compute_room_light_placement(az_or_phi, el_rad, theta_x, theta_y, room_w, r
             max(0.2, 2.0 * fallback_dist * math.tan(theta_x / 2.0)),
             max(0.2, 2.0 * fallback_dist * math.tan(theta_y / 2.0)),
             (0.0, 0.0, 0.0),
-            (0.0, yaw, 0.0)
+            (0.0, room_yaw, 0.0)
         )
 
     candidates.sort(key=lambda c: c[0])
@@ -14369,12 +14789,12 @@ def _compute_room_light_placement(az_or_phi, el_rad, theta_x, theta_y, room_w, r
 
     # Transform Euler rotation angles for Solaris RectLight
     if stype == "ceiling":
-        world_rot = (-90.0, yaw, 0.0)
+        world_rot = (-90.0, room_yaw, 0.0)
     elif stype == "floor":
-        world_rot = (90.0, yaw, 0.0)
+        world_rot = (90.0, room_yaw, 0.0)
     else:
         loc_ry = loc_rot[1]
-        world_ry = (loc_ry + yaw + 180.0) % 360.0 - 180.0
+        world_ry = (loc_ry + room_yaw + 180.0) % 360.0 - 180.0
         world_rot = (0.0, world_ry, 0.0)
 
     return world_pos, best_t, width, height, world_normal, world_rot
@@ -14755,10 +15175,9 @@ def _ensure_projection_node_parms(node):
     for zero-overhead, 60 FPS parameter tweaks."""
     if node is None:
         return
-    if node.parm("room_w") is not None:
-        return
-    try:
-        ptg = node.parmTemplateGroup()
+    ptg = node.parmTemplateGroup()
+    has_changed = False
+    if node.parm("room_w") is None:
         ptg.addParmTemplate(hou.StringParmTemplate("proj_mode", "Projection Mode", 1, default_value=["room_box"]))
         ptg.addParmTemplate(hou.FloatParmTemplate("room_w", "Room Width", 1, default_value=[8.0]))
         ptg.addParmTemplate(hou.FloatParmTemplate("room_d", "Room Depth", 1, default_value=[10.0]))
@@ -14776,6 +15195,7 @@ def _ensure_projection_node_parms(node):
         ptg.addParmTemplate(hou.FloatParmTemplate("ground_r", "Ground Radius", 1, default_value=[10.0]))
         ptg.addParmTemplate(hou.FloatParmTemplate("feather", "Feather", 1, default_value=[0.15]))
         ptg.addParmTemplate(hou.FloatParmTemplate("yaw", "Dome Yaw", 1, default_value=[0.0]))
+        ptg.addParmTemplate(hou.FloatParmTemplate("room_yaw", "Room Yaw", 1, default_value=[0.0]))
         ptg.addParmTemplate(hou.FloatParmTemplate("roughness", "Ground Roughness", 1, default_value=[1.0]))
         ptg.addParmTemplate(hou.StringParmTemplate("disc_proj_method", "Disc Proj Method", 1, default_value=["top_view"]))
         ptg.addParmTemplate(hou.StringParmTemplate("tex_file", "Texture File", 1, default_value=[""]))
@@ -14783,9 +15203,16 @@ def _ensure_projection_node_parms(node):
         ptg.addParmTemplate(hou.StringParmTemplate("mat_mode", "Material Mode", 1, default_value=["pbr"]))
         ptg.addParmTemplate(hou.FloatParmTemplate("emissive_mult", "Emissive Mult", 1, default_value=[1.0]))
         ptg.addParmTemplate(hou.StringParmTemplate("renderer_target", "Renderer Target", 1, default_value=["all"]))
-        node.setParmTemplateGroup(ptg)
-    except Exception as e:
-        print(f"[HDRI Match] Note adding spare parameters to projection node: {e}")
+        has_changed = True
+    else:
+        if node.parm("room_yaw") is None:
+            ptg.addParmTemplate(hou.FloatParmTemplate("room_yaw", "Room Yaw", 1, default_value=[0.0]))
+            has_changed = True
+    if has_changed:
+        try:
+            node.setParmTemplateGroup(ptg)
+        except Exception as e:
+            print(f"[HDRI Match] Note adding spare parameters to projection node: {e}")
 
 
 def _update_proj_node_values(proj_node, p):
@@ -14827,6 +15254,7 @@ def _update_proj_node_values(proj_node, p):
     _set_f("ground_r", p.get("ground_radius", 10.0))
     _set_f("feather", p.get("ground_feather", 0.15))
     _set_f("yaw", p.get("yaw", 0.0))
+    _set_f("room_yaw", p.get("room_yaw", p.get("yaw", 0.0)))
     roughness_to_set = 1.0 if ("all" in str(p.get("renderer_target", "all")).lower()) else float(p.get("ground_roughness", 1.0))
     _set_f("roughness", roughness_to_set)
     _set_s("disc_proj_method", p.get("disc_proj_method", "top_view"))
@@ -14901,6 +15329,7 @@ def _gen_ground_projection_code(p):
             'room_shadows = bool(node.parm("room_shadows").eval() if node.parm("room_shadows") else False)',
             'room_invisible = bool(node.parm("room_invisible").eval() if node.parm("room_invisible") else False)',
             'yaw = float(node.parm("yaw").eval() if node.parm("yaw") else 0.0)',
+            'room_yaw = float(node.parm("room_yaw").eval() if node.parm("room_yaw") else yaw)',
             f'tex_file = (node.parm("tex_file").eval() if node.parm("tex_file") else r"{tex_file}") or r"{tex_file}"',
             'use_planar = bool(node.parm("use_planar").eval() if node.parm("use_planar") else False)',
             f'planar_textures = {repr(planar_tex_dict)}',
@@ -14928,7 +15357,7 @@ def _gen_ground_projection_code(p):
             '    if not stage.GetPrimAtPath(path).IsValid():',
             '        UsdGeom.Scope.Define(stage, path)',
             'xfm = UsdGeom.XformCommonAPI(gd_xform)',
-            'xfm.SetRotate(Gf.Vec3f(0.0, yaw, 0.0))',
+            'xfm.SetRotate(Gf.Vec3f(0.0, room_yaw, 0.0))',
             '',
             '# Cached HDRI array in hou.session for zero disk I/O on 60 FPS slider tweaks',
             'if not hasattr(hou.session, "_hdri_match_cache"):',
@@ -14996,10 +15425,16 @@ def _gen_ground_projection_code(p):
             '    dx = flat_pts[:, 0] - cam_x',
             '    dy = flat_pts[:, 1] - cam_y',
             '    dz = flat_pts[:, 2] - cam_z',
-            '    dist = np.maximum(np.sqrt(dx*dx + dy*dy + dz*dz), 1e-6)',
-            '    vx = dx / dist',
-            '    vy = dy / dist',
-            '    vz = dz / dist',
+            '    rel_rad = math.radians(room_yaw - yaw)',
+            '    cos_y = float(math.cos(rel_rad))',
+            '    sin_y = float(math.sin(rel_rad))',
+            '    rx = cos_y * dx + sin_y * dz',
+            '    ry = dy',
+            '    rz = -sin_y * dx + cos_y * dz',
+            '    dist = np.maximum(np.sqrt(rx*rx + ry*ry + rz*rz), 1e-6)',
+            '    vx = rx / dist',
+            '    vy = ry / dist',
+            '    vz = rz / dist',
             '    u = (np.arctan2(-vx, vz) / (2.0 * np.pi)) % 1.0',
             '    v = 0.5 - (np.arcsin(np.clip(vy, -1.0, 1.0)) / np.pi)',
             '',
@@ -15041,13 +15476,15 @@ def _gen_ground_projection_code(p):
             '        m.CreateDisplayColorPrimvar(UsdGeom.Tokens.vertex).Set(cols)',
             '        m.CreateDisplayOpacityPrimvar(UsdGeom.Tokens.vertex).Set(Vt.FloatArray.FromNumpy(np.ones(len(flat_pts), dtype=np.float32)))',
             '        xf = UsdGeom.XformCommonAPI(m)',
-            '        xf.SetRotate(Gf.Vec3f(0.0, yaw, 0.0))',
+            '        xf.SetRotate(Gf.Vec3f(0.0, 0.0, 0.0))',
             '    else:',
             '        m = UsdGeom.Mesh(p_mesh)',
             '        if not p_mesh.IsActive():',
             '            p_mesh.SetActive(True)',
             '        m.GetPointsAttr().Set(pts)',
             '        m.GetNormalsAttr().Set(nrms)',
+            '        xf = UsdGeom.XformCommonAPI(m)',
+            '        xf.SetRotate(Gf.Vec3f(0.0, 0.0, 0.0))',
             '        pv = UsdGeom.PrimvarsAPI(p_mesh)',
             '        if not is_planar:',
             '            u_p = u[quad_indices].reshape(-1, 4)',
@@ -15065,6 +15502,13 @@ def _gen_ground_projection_code(p):
             '            pv_uv = pv.GetPrimvar("uv")',
             '            if pv_uv: pv_uv.Set(s_uvs)',
             '            else: pv.CreatePrimvar("uv", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.faceVarying).Set(s_uvs)',
+            '        else:',
+            '            pv_st = pv.GetPrimvar("st")',
+            '            if pv_st: pv_st.Set(planar_f_uvs)',
+            '            else: pv.CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.faceVarying).Set(planar_f_uvs)',
+            '            pv_uv = pv.GetPrimvar("uv")',
+            '            if pv_uv: pv_uv.Set(planar_f_uvs)',
+            '            else: pv.CreatePrimvar("uv", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.faceVarying).Set(planar_f_uvs)',
             '        pv_col = pv.GetPrimvar("displayColor")',
             '        if pv_col: pv_col.Set(cols)',
             '        else: m.CreateDisplayColorPrimvar(UsdGeom.Tokens.vertex).Set(cols)',
@@ -15102,29 +15546,63 @@ def _gen_ground_projection_code(p):
         lines.extend([
             '',
             'def apply_surface_attrs(prim):',
-            '    """Apply shadow, emissive, and render visibility attributes to a room mesh prim if changed."""',
-            '    target_karma_vis = "diffuse reflect refract" if (room_invisible and not room_shadows) else ("diffuse reflect refract shadow" if room_invisible else ("primary diffuse reflect refract" if not room_shadows else "*"))',
+            '    """Apply shadow, emissive, and render visibility attributes to a room mesh prim."""',
+            '    # 1. Karma: phantom visibility (-primary = invisible to camera, visible to reflections, GI, refraction)',
+            '    target_karma_vis = ("-primary" if room_shadows else "-primary & -shadow") if room_invisible else ("*" if room_shadows else "-shadow")',
             '    cur_k_vis = prim.GetAttribute("primvars:karma:object:rendervisibility").Get() if prim.HasAttribute("primvars:karma:object:rendervisibility") else None',
             '    if cur_k_vis != target_karma_vis:',
             '        prim.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set(target_karma_vis)',
+            '        prim.CreateAttribute("karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set(target_karma_vis)',
+            '    # 2. Arnold: camera, reflections, GI (diffuse_reflect), refraction (transmit), shadows, and bitmask',
             '    target_a_cam = False if room_invisible else True',
+            '    target_shd = bool(room_shadows)',
+            '    target_a_mask = (1 if target_a_cam else 0) | (2 if target_shd else 0) | 4 | 8 | 16 | 32 | 64',
             '    cur_a_cam = prim.GetAttribute("primvars:arnold:visibility:camera").Get() if prim.HasAttribute("primvars:arnold:visibility:camera") else None',
-            '    if cur_a_cam != target_a_cam:',
+            '    cur_shd = prim.GetAttribute("primvars:arnold:visibility:shadow").Get() if prim.HasAttribute("primvars:arnold:visibility:shadow") else None',
+            '    if cur_a_cam != target_a_cam or cur_shd != target_shd or not prim.HasAttribute("primvars:arnold:visibility:diffuse_reflect"):',
             '        prim.CreateAttribute("primvars:arnold:visibility:camera", Sdf.ValueTypeNames.Bool, False).Set(target_a_cam)',
             '        prim.CreateAttribute("arnold:visibility:camera", Sdf.ValueTypeNames.Int, False).Set(1 if target_a_cam else 0)',
-            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_PRIMARYRAYVISIBLE", Sdf.ValueTypeNames.Bool, False).Set(target_a_cam)',
-            '        prim.CreateAttribute("redshift:object:MESHFLAG_PRIMARYRAYVISIBLE", Sdf.ValueTypeNames.Bool, False).Set(target_a_cam)',
-            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_PRIMARYRAYVIS", Sdf.ValueTypeNames.Bool, False).Set(target_a_cam)',
-            '        prim.CreateAttribute("redshift:object:MESHFLAG_PRIMARYRAYVIS", Sdf.ValueTypeNames.Bool, False).Set(target_a_cam)',
-            '    target_shd = bool(room_shadows)',
-            '    cur_shd = prim.GetAttribute("primvars:arnold:visibility:shadow").Get() if prim.HasAttribute("primvars:arnold:visibility:shadow") else None',
-            '    if cur_shd != target_shd:',
+            '        prim.CreateAttribute("primvars:arnold:visibility:diffuse_reflect", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("arnold:visibility:diffuse_reflect", Sdf.ValueTypeNames.Int, False).Set(1)',
+            '        prim.CreateAttribute("primvars:arnold:visibility:specular_reflect", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("arnold:visibility:specular_reflect", Sdf.ValueTypeNames.Int, False).Set(1)',
+            '        prim.CreateAttribute("primvars:arnold:visibility:diffuse_transmit", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("arnold:visibility:diffuse_transmit", Sdf.ValueTypeNames.Int, False).Set(1)',
+            '        prim.CreateAttribute("primvars:arnold:visibility:specular_transmit", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("arnold:visibility:specular_transmit", Sdf.ValueTypeNames.Int, False).Set(1)',
+            '        prim.CreateAttribute("primvars:arnold:visibility:volume", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("arnold:visibility:volume", Sdf.ValueTypeNames.Int, False).Set(1)',
             '        prim.CreateAttribute("primvars:arnold:visibility:shadow", Sdf.ValueTypeNames.Bool, False).Set(target_shd)',
             '        prim.CreateAttribute("arnold:visibility:shadow", Sdf.ValueTypeNames.Int, False).Set(1 if target_shd else 0)',
             '        prim.CreateAttribute("primvars:arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
             '        prim.CreateAttribute("arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("primvars:arnold:visibility", Sdf.ValueTypeNames.UChar, False).Set(target_a_mask)',
+            '        prim.CreateAttribute("arnold:visibility", Sdf.ValueTypeNames.Int, False).Set(target_a_mask)',
+            '    # 3. Redshift: primary rays, reflection visible, GI visible, refraction visible, shadow caster',
+            '    cur_rs_cam = prim.GetAttribute("primvars:redshift:object:MESHFLAG_PRIMARYRAYVISIBLE").Get() if prim.HasAttribute("primvars:redshift:object:MESHFLAG_PRIMARYRAYVISIBLE") else None',
+            '    if cur_rs_cam != target_a_cam or not prim.HasAttribute("primvars:redshift:object:MESHFLAG_REFLECTIONVISIBLE"):',
+            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_PRIMARYRAYVISIBLE", Sdf.ValueTypeNames.Bool, False).Set(target_a_cam)',
+            '        prim.CreateAttribute("redshift:object:MESHFLAG_PRIMARYRAYVISIBLE", Sdf.ValueTypeNames.Bool, False).Set(target_a_cam)',
+            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_PRIMARYRAYVIS", Sdf.ValueTypeNames.Bool, False).Set(target_a_cam)',
+            '        prim.CreateAttribute("redshift:object:MESHFLAG_PRIMARYRAYVIS", Sdf.ValueTypeNames.Bool, False).Set(target_a_cam)',
+            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_REFLECTIONVISIBLE", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("redshift:object:MESHFLAG_REFLECTIONVISIBLE", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_REFLECTIONVIS", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("redshift:object:MESHFLAG_REFLECTIONVIS", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_REFRACTIONVISIBLE", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("redshift:object:MESHFLAG_REFRACTIONVISIBLE", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_REFRACTIONVIS", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("redshift:object:MESHFLAG_REFRACTIONVIS", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_GIVISIBLE", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("redshift:object:MESHFLAG_GIVISIBLE", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_GIVIS", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("redshift:object:MESHFLAG_GIVIS", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_GICASTER", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("redshift:object:MESHFLAG_GICASTER", Sdf.ValueTypeNames.Bool, False).Set(True)',
             '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(target_shd)',
             '        prim.CreateAttribute("redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(target_shd)',
+            '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_SHADOWRECEIVER", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("redshift:object:MESHFLAG_SHADOWRECEIVER", Sdf.ValueTypeNames.Bool, False).Set(True)',
             '    if mat_mode_val in ("emissive", "pbr_emissive"):',
             '        prim.CreateAttribute("primvars:karma:object:treat_as_lightsource", Sdf.ValueTypeNames.Int, False).Set(1)',
             '        prim.CreateAttribute("primvars:karma:object:lightsource:samplingquality", Sdf.ValueTypeNames.Float, False).Set(1.0)',
@@ -15134,14 +15612,17 @@ def _gen_ground_projection_code(p):
             '    elif prim.HasAttribute("primvars:karma:object:treat_as_lightsource"):',
             '        prim.CreateAttribute("primvars:karma:object:treat_as_lightsource", Sdf.ValueTypeNames.Int, False).Set(0)',
             '',
-            '# Shared material when not in planar mode to minimize shader compilation and USD prim graph creation',
-            'shared_mat = None',
-            'if not use_planar:',
-            '    shared_mat_path = Sdf.Path("/environment/ground_dome/mats/room_mat")',
-            '    if not stage.GetPrimAtPath(shared_mat_path).IsValid():',
-            '        shared_mat = create_native_material(stage, shared_mat_path, tex_file, roughness_val, mat_mode_val, emissive_mult_val, "st", renderer_target)',
-            '    else:',
-            '        shared_mat = UsdShade.Material(stage.GetPrimAtPath(shared_mat_path))',
+            '# Shared material for real-time equirectangular camera projection (dynamic spherical UVs)',
+            'shared_mat_path = Sdf.Path("/environment/ground_dome/mats/room_mat")',
+            'shared_mat = create_native_material(stage, shared_mat_path, tex_file, roughness_val, mat_mode_val, emissive_mult_val, "st", renderer_target)',
+            '',
+            '# Helper: only use planar mapping if a valid baked rectilinear EXR exists on disk',
+            'def resolve_surface_planar(sname):',
+            '    if use_planar and isinstance(planar_textures, dict) and planar_textures.get(sname):',
+            '        f = planar_textures[sname]',
+            '        if f and os.path.isfile(f) and os.path.getsize(f) > 0:',
+            '            return True, f',
+            '    return False, tex_file',
             '',
             '# --- 1. Floor ---',
             'if inc_floor:',
@@ -15151,15 +15632,14 @@ def _gen_ground_projection_code(p):
             '        np.array([x_max, y_min, z_min]),',
             '        np.array([x_min, y_min, z_min]),',
             '    ]',
-            '    fl_mesh = build_rect_grid_mesh("/environment/ground_dome/floor", c_floor, np.array([0.0, 1.0, 0.0]), is_planar=use_planar)',
-            '    if not use_planar and shared_mat:',
+            '    is_fl_pln, fl_tex = resolve_surface_planar("floor")',
+            '    fl_mesh = build_rect_grid_mesh("/environment/ground_dome/floor", c_floor, np.array([0.0, 1.0, 0.0]), is_planar=is_fl_pln)',
+            '    if not is_fl_pln and shared_mat:',
             '        UsdShade.MaterialBindingAPI(fl_mesh.GetPrim()).Bind(shared_mat)',
             '    else:',
             '        fl_mat_path = Sdf.Path("/environment/ground_dome/mats/floor_mat")',
-            '        if not stage.GetPrimAtPath(fl_mat_path).IsValid():',
-            '            fl_tex = planar_textures.get("floor", tex_file) if (use_planar and planar_textures.get("floor")) else tex_file',
-            '            fl_mat = create_native_material(stage, fl_mat_path, fl_tex, roughness_val, mat_mode_val, emissive_mult_val, "st", renderer_target)',
-            '            UsdShade.MaterialBindingAPI(fl_mesh.GetPrim()).Bind(fl_mat)',
+            '        fl_mat = create_native_material(stage, fl_mat_path, fl_tex, roughness_val, mat_mode_val, emissive_mult_val, "st", renderer_target)',
+            '        UsdShade.MaterialBindingAPI(fl_mesh.GetPrim()).Bind(fl_mat)',
             '    apply_surface_attrs(fl_mesh.GetPrim())',
             'else:',
             '    fl_prim = stage.GetPrimAtPath("/environment/ground_dome/floor")',
@@ -15174,15 +15654,14 @@ def _gen_ground_projection_code(p):
             '        np.array([x_max, y_max, z_max]),',
             '        np.array([x_min, y_max, z_max]),',
             '    ]',
-            '    cl_mesh = build_rect_grid_mesh("/environment/ground_dome/ceiling", c_ceil, np.array([0.0, -1.0, 0.0]), is_planar=use_planar)',
-            '    if not use_planar and shared_mat:',
+            '    is_cl_pln, cl_tex = resolve_surface_planar("ceiling")',
+            '    cl_mesh = build_rect_grid_mesh("/environment/ground_dome/ceiling", c_ceil, np.array([0.0, -1.0, 0.0]), is_planar=is_cl_pln)',
+            '    if not is_cl_pln and shared_mat:',
             '        UsdShade.MaterialBindingAPI(cl_mesh.GetPrim()).Bind(shared_mat)',
             '    else:',
             '        cl_mat_path = Sdf.Path("/environment/ground_dome/mats/ceiling_mat")',
-            '        if not stage.GetPrimAtPath(cl_mat_path).IsValid():',
-            '            cl_tex = planar_textures.get("ceiling", tex_file) if (use_planar and planar_textures.get("ceiling")) else tex_file',
-            '            cl_mat = create_native_material(stage, cl_mat_path, cl_tex, roughness_val, mat_mode_val, emissive_mult_val, "st", renderer_target)',
-            '            UsdShade.MaterialBindingAPI(cl_mesh.GetPrim()).Bind(cl_mat)',
+            '        cl_mat = create_native_material(stage, cl_mat_path, cl_tex, roughness_val, mat_mode_val, emissive_mult_val, "st", renderer_target)',
+            '        UsdShade.MaterialBindingAPI(cl_mesh.GetPrim()).Bind(cl_mat)',
             '    apply_surface_attrs(cl_mesh.GetPrim())',
             'else:',
             '    cl_prim = stage.GetPrimAtPath("/environment/ground_dome/ceiling")',
@@ -15198,16 +15677,15 @@ def _gen_ground_projection_code(p):
             ']',
             'if inc_walls:',
             '    for w_name, w_corners, w_normal in wall_specs:',
+            '        is_w_pln, w_tex = resolve_surface_planar(w_name)',
             '        w_path = f"/environment/ground_dome/walls/{w_name}"',
-            '        w_mesh = build_rect_grid_mesh(w_path, w_corners, w_normal, is_planar=use_planar)',
-            '        if not use_planar and shared_mat:',
+            '        w_mesh = build_rect_grid_mesh(w_path, w_corners, w_normal, is_planar=is_w_pln)',
+            '        if not is_w_pln and shared_mat:',
             '            UsdShade.MaterialBindingAPI(w_mesh.GetPrim()).Bind(shared_mat)',
             '        else:',
             '            w_mat_path = Sdf.Path(f"/environment/ground_dome/mats/{w_name}_mat")',
-            '            if not stage.GetPrimAtPath(w_mat_path).IsValid():',
-            '                w_tex = planar_textures.get(w_name, tex_file) if (use_planar and planar_textures.get(w_name)) else tex_file',
-            '                w_mat = create_native_material(stage, w_mat_path, w_tex, roughness_val, mat_mode_val, emissive_mult_val, "st", renderer_target)',
-            '                UsdShade.MaterialBindingAPI(w_mesh.GetPrim()).Bind(w_mat)',
+            '            w_mat = create_native_material(stage, w_mat_path, w_tex, roughness_val, mat_mode_val, emissive_mult_val, "st", renderer_target)',
+            '            UsdShade.MaterialBindingAPI(w_mesh.GetPrim()).Bind(w_mat)',
             '        apply_surface_attrs(w_mesh.GetPrim())',
             'else:',
             '    for w_name, _, _ in wall_specs:',

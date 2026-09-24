@@ -832,8 +832,10 @@ def create_or_update_material_library(stage_node, p, mat_lib_node_name=None):
     feather = float(p.get("ground_feather", 0.15))
 
     proj_mode = p.get("proj_mode", "room_box")
-    planar_textures = p.get("planar_textures", {})
-    hdri_tex = p.get("hdri_texture", "")
+    use_planar = bool(p.get("use_planar", (p.get("ground_tex_mode", "planar") == "planar") if isinstance(p.get("ground_tex_mode"), str) else (p.get("ground_tex_mode_idx", 0) == 0)))
+    planar_textures = p.get("planar_textures", {}) if use_planar else {}
+    import os
+    hdri_tex = p.get("hdri_texture", "") or p.get("hdri_file", "") or p.get("hdri_tex", "")
 
     # Determine target scene prefix: splatforge (/stage/room) vs domebreaker (/environment/ground_dome)
     mat_lib_name = str(p.get("mat_lib_node_name", mat_lib.name() if hasattr(mat_lib, "name") else "hdri_materials")).lower()
@@ -857,27 +859,34 @@ def create_or_update_material_library(stage_node, p, mat_lib_node_name=None):
         # Fallback to prefix-based candidate
         return candidates[0] if is_splatforge else (candidates[1] if len(candidates) > 1 else candidates[0])
 
+    def _surf_tex(sname):
+        if use_planar and isinstance(planar_textures, dict):
+            t = planar_textures.get(sname, "")
+            if t and os.path.isfile(t) and os.path.getsize(t) > 0:
+                return t
+        return hdri_tex
+
     # Define surface map specs with context-accurate geometry paths
     if proj_mode == "room_box":
         surfaces = [
-            ("floor", "floor_mat", planar_textures.get("floor", hdri_tex),
+            ("floor", "floor_mat", _surf_tex("floor"),
              _resolve_geopath(["/stage/room/floor", "/environment/ground_dome/floor", "/world/room/floor"])),
-            ("ceiling", "ceiling_mat", planar_textures.get("ceiling", hdri_tex),
+            ("ceiling", "ceiling_mat", _surf_tex("ceiling"),
              _resolve_geopath(["/stage/room/ceiling", "/environment/ground_dome/ceiling", "/world/room/ceiling"])),
-            ("wall_north", "wall_north_mat", planar_textures.get("wall_north", hdri_tex),
+            ("wall_north", "wall_north_mat", _surf_tex("wall_north"),
              _resolve_geopath(["/stage/room/walls/wall_north", "/environment/ground_dome/walls/wall_north", "/environment/ground_dome/wall_north"])),
-            ("wall_south", "wall_south_mat", planar_textures.get("wall_south", hdri_tex),
+            ("wall_south", "wall_south_mat", _surf_tex("wall_south"),
              _resolve_geopath(["/stage/room/walls/wall_south", "/environment/ground_dome/walls/wall_south", "/environment/ground_dome/wall_south"])),
-            ("wall_east", "wall_east_mat", planar_textures.get("wall_east", hdri_tex),
+            ("wall_east", "wall_east_mat", _surf_tex("wall_east"),
              _resolve_geopath(["/stage/room/walls/wall_east", "/environment/ground_dome/walls/wall_east", "/environment/ground_dome/wall_east"])),
-            ("wall_west", "wall_west_mat", planar_textures.get("wall_west", hdri_tex),
+            ("wall_west", "wall_west_mat", _surf_tex("wall_west"),
              _resolve_geopath(["/stage/room/walls/wall_west", "/environment/ground_dome/walls/wall_west", "/environment/ground_dome/wall_west"])),
-            ("props", "props_mat", planar_textures.get("props", hdri_tex),
+            ("props", "props_mat", planar_textures.get("props", hdri_tex) if (use_planar and isinstance(planar_textures, dict)) else hdri_tex,
              _resolve_geopath(["/stage/room/props/*", "/environment/ground_dome/props/*", "/world/room/props/*"])),
         ]
     else:
         # Ground disc mode
-        ground_tex = planar_textures.get("ground", hdri_tex)
+        ground_tex = _surf_tex("ground")
         surfaces = [
             ("ground", "ground_mat", ground_tex,
              _resolve_geopath(["/environment/ground_dome/ground_plane", "/environment/ground_dome/ground_mesh", "/environment/ground_dome/ground_disc"])),

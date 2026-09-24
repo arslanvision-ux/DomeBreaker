@@ -21,7 +21,9 @@ def _build_panel():
             except Exception:
                 pass
                 
+        import importlib
         import hdri_match_solaris.panel_ui
+        importlib.reload(hdri_match_solaris.panel_ui)
         return hdri_match_solaris.panel_ui.createInterface()
     except Exception as e:
         import traceback
