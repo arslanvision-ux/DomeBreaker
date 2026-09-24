@@ -2371,11 +2371,36 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         self.chk_arch_props = QtWidgets.QCheckBox("Interior Props & Columns")
         self.chk_arch_props.setChecked(True)
-        self.chk_arch_props.setToolTip("Generate simple proxy primitives (boxes, cylindrical columns, spheres) covering detected props and columns with Gaussian splat shading.")
+        self.chk_arch_props.setToolTip("Extract and reconstruct 3D geometry for detected interior props, tables, shelves, and columns.")
 
         self.combo_arch_proxy_shape = QtWidgets.QComboBox()
-        self.combo_arch_proxy_shape.addItems(["Cylinder Columns & Boxes", "Boxes Only", "Spheres / Rounded"])
-        self.combo_arch_proxy_shape.setToolTip("Geometry shape used for proxy objects covering detected props and columns.")
+        self.combo_arch_proxy_shape.addItems([
+            "⚡ Auto 3D Meshes (VDB & Depth Map)",
+            "⚡ Top-Down Depth Map Meshes (Counters & Tables)",
+            "⚡ OpenVDB Volumetric Meshes (Organic & Fixtures)",
+            "Cylinder Columns & Boxes (Primitive Proxy)",
+            "Boxes Only (Oriented Bounding Boxes)",
+            "Spheres / Rounded (Proxy)",
+        ])
+        self.combo_arch_proxy_shape.setToolTip(
+            "Geometry representation for detected interior props:\n"
+            "• ⚡ Auto 3D Meshes: Watertight Depth Map heightfields with floor skirts for tables/desks, OpenVDB volumetric SDF meshes for plants/organic props.\n"
+            "• ⚡ Top-Down Depth Map: 2.5D elevation heightfield with vertical floor skirts (ideal for tables & flat counters).\n"
+            "• ⚡ OpenVDB Volumetric: True 3D OpenVDB particle SDF meshing (ideal for trees, plants, fixtures, organic sculptures).\n"
+            "• Primitive Proxies: Lightweight cylinder, box, or sphere bounding primitives."
+        )
+
+        self.lbl_arch_prop_res = QtWidgets.QLabel("Mesh Res:")
+        self.sld_arch_prop_res = SliderDoubleSpinBox(0.01, 0.15, 0.005, 0.035, decimals=3)
+        self.sld_arch_prop_res.setToolTip("Mesh resolution in meters for reconstructed 3D prop geometry (e.g. 0.035m = 3.5cm voxels).")
+
+        def _update_prop_res_visibility():
+            txt = self.combo_arch_proxy_shape.currentText()
+            is_mesh = "3D Mesh" in txt or "Meshes" in txt
+            self.lbl_arch_prop_res.setEnabled(is_mesh)
+            self.sld_arch_prop_res.setEnabled(is_mesh)
+
+        self.combo_arch_proxy_shape.currentIndexChanged.connect(lambda _: _update_prop_res_visibility())
 
         self.chk_arch_snap_lookdev = QtWidgets.QCheckBox("Snap Lookdev Rig to Floor")
         self.chk_arch_snap_lookdev.setChecked(True)
@@ -2385,6 +2410,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         comp_row_2.addWidget(self.chk_arch_portals)
         comp_row_2.addWidget(self.chk_arch_props)
         comp_row_2.addWidget(self.combo_arch_proxy_shape)
+        comp_row_2.addWidget(self.lbl_arch_prop_res)
+        comp_row_2.addWidget(self.sld_arch_prop_res)
         comp_row_2.addWidget(self.chk_arch_snap_lookdev)
         lay.addRow("Features:", comp_row_2)
 
@@ -4646,8 +4673,19 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             scale_val = float(self.sld_arch_scale.value()) if hasattr(self, 'sld_arch_scale') else 1.0
             int_mode = "tight" if (hasattr(self, 'combo_arch_interior_mode') and self.combo_arch_interior_mode.currentIndex() == 0) else "full"
             build_props = self.chk_arch_props.isChecked() if hasattr(self, 'chk_arch_props') else True
-            proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "Cylinder Columns & Boxes"
-            proxy_shape_mode = "box" if "Boxes Only" in proxy_shape_sel else ("sphere" if "Sphere" in proxy_shape_sel else "auto")
+            proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "⚡ Auto 3D Meshes (VDB & Depth Map)"
+            if "Depth Map" in proxy_shape_sel:
+                proxy_shape_mode = "mesh_depth"
+            elif "OpenVDB" in proxy_shape_sel:
+                proxy_shape_mode = "mesh_vdb"
+            elif "3D Mesh" in proxy_shape_sel or "Meshes" in proxy_shape_sel:
+                proxy_shape_mode = "mesh_auto"
+            elif "Boxes Only" in proxy_shape_sel:
+                proxy_shape_mode = "box"
+            elif "Sphere" in proxy_shape_sel:
+                proxy_shape_mode = "sphere"
+            else:
+                proxy_shape_mode = "auto"
 
             room_data = self._splat_scene.analyze_room_architecture(
                 flip_y=flip_y,
@@ -4680,6 +4718,36 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     extract_props=build_props,
                     proxy_shape_mode=proxy_shape_mode,
                 )
+
+            # If 3D prop meshing is selected, run reconstruction on detected prop clusters
+            if build_props and room_data.get("props") and proxy_shape_mode.startswith("mesh_"):
+                from hdri_match_solaris.splat_prop_reconstructor import reconstruct_prop_cluster
+                voxel_res = float(self.sld_arch_prop_res.value()) if hasattr(self, 'sld_arch_prop_res') else 0.035
+                mesh_method = "heightfield" if proxy_shape_mode == "mesh_depth" else ("vdb" if proxy_shape_mode == "mesh_vdb" else "auto")
+                floor_y_val = float(room_data.get("floor_y", 0.0))
+
+                hip_dir = hou.expandString("$HIP") if 'hou' in sys.modules and hasattr(hou, 'expandString') else "."
+                if not hip_dir or hip_dir == "." or "houdini_temp" in hip_dir:
+                    hip_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS"
+                out_props_dir = os.path.join(hip_dir, "scenes", "props").replace("\\", "/")
+                os.makedirs(out_props_dir, exist_ok=True)
+
+                self.log(f"Reconstructing {len(room_data['props'])} interior 3D prop meshes ({proxy_shape_sel}, res: {voxel_res}m)...", "INFO")
+                for p in room_data["props"]:
+                    try:
+                        m_file = reconstruct_prop_cluster(
+                            prop=p,
+                            method=mesh_method,
+                            floor_y=floor_y_val,
+                            voxel_res=voxel_res,
+                            output_dir=out_props_dir,
+                        )
+                        if m_file and os.path.isfile(m_file):
+                            p["mesh_file"] = m_file
+                            p["shape"] = "mesh"
+                            self.log(f"  ✓ Prop '{p.get('name')}' reconstructed -> {os.path.basename(m_file)}", "INFO")
+                    except Exception as ex_m:
+                        self.log(f"Warning: Prop mesh calculation for '{p.get('name')}' failed: {ex_m}. Falling back to proxy primitive.", "WARNING")
 
             self._last_room_data = room_data
 
@@ -5204,8 +5272,19 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 scale_val = float(self.sld_arch_scale.value()) if hasattr(self, 'sld_arch_scale') else 1.0
                 int_mode = "tight" if (hasattr(self, 'combo_arch_interior_mode') and self.combo_arch_interior_mode.currentIndex() == 0) else "full"
                 build_props = self.chk_arch_props.isChecked() if hasattr(self, 'chk_arch_props') else True
-                proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "Cylinder Columns & Boxes"
-                proxy_shape_mode = "box" if "Boxes Only" in proxy_shape_sel else ("sphere" if "Sphere" in proxy_shape_sel else "auto")
+                proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "⚡ Auto 3D Meshes (VDB & Depth Map)"
+                if "Depth Map" in proxy_shape_sel:
+                    proxy_shape_mode = "mesh_depth"
+                elif "OpenVDB" in proxy_shape_sel:
+                    proxy_shape_mode = "mesh_vdb"
+                elif "3D Mesh" in proxy_shape_sel or "Meshes" in proxy_shape_sel:
+                    proxy_shape_mode = "mesh_auto"
+                elif "Boxes Only" in proxy_shape_sel:
+                    proxy_shape_mode = "box"
+                elif "Sphere" in proxy_shape_sel:
+                    proxy_shape_mode = "sphere"
+                else:
+                    proxy_shape_mode = "auto"
                 self._last_room_data = self._splat_scene.analyze_room_architecture(
                     flip_y=flip_y,
                     scene_scale=scale_val,
@@ -5377,8 +5456,19 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     scale_val = float(self.sld_arch_scale.value()) if hasattr(self, 'sld_arch_scale') else 1.0
                     int_mode = "tight" if (hasattr(self, 'combo_arch_interior_mode') and self.combo_arch_interior_mode.currentIndex() == 0) else "full"
                     build_props = self.chk_arch_props.isChecked() if hasattr(self, 'chk_arch_props') else True
-                    proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "Cylinder Columns & Boxes"
-                    proxy_shape_mode = "box" if "Boxes Only" in proxy_shape_sel else ("sphere" if "Sphere" in proxy_shape_sel else "auto")
+                    proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "⚡ Auto 3D Meshes (VDB & Depth Map)"
+                    if "Depth Map" in proxy_shape_sel:
+                        proxy_shape_mode = "mesh_depth"
+                    elif "OpenVDB" in proxy_shape_sel:
+                        proxy_shape_mode = "mesh_vdb"
+                    elif "3D Mesh" in proxy_shape_sel or "Meshes" in proxy_shape_sel:
+                        proxy_shape_mode = "mesh_auto"
+                    elif "Boxes Only" in proxy_shape_sel:
+                        proxy_shape_mode = "box"
+                    elif "Sphere" in proxy_shape_sel:
+                        proxy_shape_mode = "sphere"
+                    else:
+                        proxy_shape_mode = "auto"
                     room_data = self._splat_scene.analyze_room_architecture(
                         flip_y=flip_y,
                         scene_scale=scale_val,

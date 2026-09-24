@@ -2179,10 +2179,23 @@ def build_usd_room_architecture(
 
     # 4. Interior Props & Columns
     if build_props and props:
+        # Create lightweight serialization of props (strip out raw numpy point arrays to keep LOP script clean)
+        clean_props = []
+        for p in props:
+            p_dict = {}
+            for k, v in p.items():
+                if k in ("points", "colors"):
+                    continue
+                if isinstance(v, (np.ndarray, list)):
+                    p_dict[k] = [float(x) for x in v]
+                else:
+                    p_dict[k] = v
+            clean_props.append(p_dict)
+
         py_lines.extend([
             '# --- 4. Interior Props & Columns ---',
             'props_scope = UsdGeom.Scope.Define(stage, "/stage/room/props")',
-            f'props_data = {repr(props)}',
+            f'props_data = {repr(clean_props)}',
             'for prop in props_data:',
             '    p_name = prop.get("name", "prop")',
             '    p_shape = prop.get("shape", "box")',
@@ -2194,6 +2207,37 @@ def build_usd_room_architecture(
             '    p_rad = float(prop.get("radius", 0.3))',
             '    p_col = prop.get("color", [0.65, 0.65, 0.65])',
             '    p_mesh_path = f"/stage/room/props/{p_name}"',
+            '    p_mesh_file = prop.get("mesh_file")',
+            '    if p_mesh_file and os.path.isfile(p_mesh_file):',
+            '        p_prim = stage.DefinePrim(p_mesh_path)',
+            '        p_prim.GetReferences().ClearReferences()',
+            '        p_prim.GetReferences().AddReference(p_mesh_file)',
+            '        p_prim.CreateAttribute("primvars:karma:object:dicing:quality", Sdf.ValueTypeNames.Float, False).Set(0.0)',
+            '        p_prim.CreateAttribute("primvars:arnold:subdiv_type", Sdf.ValueTypeNames.String, False).Set("none")',
+            '        p_prim.CreateAttribute("primvars:arnold:subdiv_iterations", Sdf.ValueTypeNames.Int, False).Set(0)',
+            '        p_prim.CreateAttribute("primvars:arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        p_prim.CreateAttribute("arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        p_prim.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set("*")',
+            '        p_prim.CreateAttribute("primvars:karma:object:lightsource:doublesided", Sdf.ValueTypeNames.Int, False).Set(1)',
+            '        if mat_mode in ("emissive", "pbr_emissive"):',
+            '            p_prim.CreateAttribute("primvars:karma:object:treat_as_lightsource", Sdf.ValueTypeNames.Int, False).Set(1)',
+            '            p_prim.CreateAttribute("primvars:arnold:mesh_light", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '            p_prim.CreateAttribute("primvars:redshift:object:MESHFLAG_GICASTER", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        if prop.get("is_light"):',
+            '            cx, cy, cz = float(p_center[0]), float(p_center[1]), float(p_center[2])',
+            '            r = float(p_rad)',
+            '            pl_path = f"/stage/room/props/{p_name}_light"',
+            '            pl_light = UsdLux.SphereLight.Define(stage, pl_path)',
+            '            pl_light.CreateIntensityAttr().Set(18.0)',
+            '            pl_light.CreateExposureAttr().Set(0.0)',
+            '            pl_light.CreateColorAttr().Set(Gf.Vec3f(1.0, 0.94, 0.82))',
+            '            pl_light.CreateRadiusAttr().Set(float(r * 0.85))',
+            '            pl_light.CreateNormalizeAttr().Set(False)',
+            '            pl_xform = UsdGeom.Xformable(pl_light.GetPrim())',
+            '            pl_xform.ClearXformOpOrder()',
+            '            pl_xform.AddTranslateOp().Set(Gf.Vec3d(cx, cy, cz))',
+            '        continue',
+            '',
             '    p_mesh = UsdGeom.Mesh.Define(stage, p_mesh_path)',
             '    p_prim = p_mesh.GetPrim()',
             '    p_prim.CreateAttribute("primvars:karma:object:dicing:quality", Sdf.ValueTypeNames.Float, False).Set(0.0)',

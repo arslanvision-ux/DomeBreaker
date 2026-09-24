@@ -169,6 +169,7 @@ def reconstruct_heightfield_prop(
     floor_y=0.0,
     grid_res=0.03,
     skirt_to_floor=True,
+    colors=None,
     output_path=None,
 ):
     """
@@ -181,6 +182,7 @@ def reconstruct_heightfield_prop(
         floor_y: Detected room floor elevation.
         grid_res: Horizontal sampling resolution in meters (default 0.03m).
         skirt_to_floor: Drop vertical side walls all the way down to floor_y.
+        colors: Optional (N, 3) float32 point RGB colors to map onto the mesh.
         output_path: Destination .bgeo.sc or .usd file path.
 
     Returns:
@@ -202,13 +204,21 @@ def reconstruct_heightfield_prop(
     nz = max(2, min(nz, 300))
 
     height_grid = np.full((nx, nz), np.nan, dtype=np.float32)
+    color_grid = np.zeros((nx, nz, 3), dtype=np.float32)
+    color_weights = np.zeros((nx, nz), dtype=np.float32)
+
     ix = np.clip(np.floor((points[:, 0] - min_x) / grid_res).astype(np.int32), 0, nx - 1)
     iz = np.clip(np.floor((points[:, 2] - min_z) / grid_res).astype(np.int32), 0, nz - 1)
 
-    # 1. Project maximum elevation per cell
-    for p_y, x_i, z_i in zip(points[:, 1], ix, iz):
+    has_cols = colors is not None and len(colors) == len(points)
+
+    # 1. Project maximum elevation per cell & accumulate colors
+    for idx, (p_y, x_i, z_i) in enumerate(zip(points[:, 1], ix, iz)):
         if np.isnan(height_grid[x_i, z_i]) or p_y > height_grid[x_i, z_i]:
             height_grid[x_i, z_i] = float(p_y)
+        if has_cols:
+            color_grid[x_i, z_i] += colors[idx]
+            color_weights[x_i, z_i] += 1.0
 
     # Infill missing cells with nearest valid elevation or median
     valid_mask = ~np.isnan(height_grid)
@@ -225,28 +235,57 @@ def reconstruct_heightfield_prop(
             smoothed_grid[i, j] = np.mean(height_grid[i-1:i+2, j-1:j+2])
     height_grid = smoothed_grid
 
+    # Normalize color grid
+    valid_cw = color_weights > 0
+    avg_col = np.array([0.65, 0.65, 0.65], dtype=np.float32)
+    if has_cols and np.any(valid_cw):
+        color_grid[valid_cw] /= color_weights[valid_cw, None]
+        avg_col = np.mean(colors, axis=0).astype(np.float32)
+    color_grid[~valid_cw] = avg_col
+
     # 2. Build polygonal geometry
     if not hou:
         return None
 
     geo = hou.Geometry()
+    n_attrib = geo.addAttrib(hou.attribType.Point, "N", hou.Vector3(0.0, 1.0, 0.0))
+    cd_attrib = geo.addAttrib(hou.attribType.Point, "Cd", hou.Vector3(0.65, 0.65, 0.65))
+    uv_attrib = geo.addAttrib(hou.attribType.Point, "uv", hou.Vector3(0.0, 0.0, 0.0))
 
-    # Create top surface points
+    # Create top surface points with smooth analytic normals
     pt_top = {}
     pt_base = {}
 
     for i in range(nx):
         x_val = float(min_x + i * grid_res)
+        u_val = float(i) / max(1, nx - 1)
         for j in range(nz):
             z_val = float(min_z + j * grid_res)
+            v_val = float(j) / max(1, nz - 1)
             y_val = float(height_grid[i, j])
+
+            # Analytic normal at (i, j)
+            dx = (height_grid[min(nx - 1, i + 1), j] - height_grid[max(0, i - 1), j]) / (2.0 * grid_res)
+            dz = (height_grid[i, min(nz - 1, j + 1)] - height_grid[i, max(0, j - 1)]) / (2.0 * grid_res)
+            n_top = hou.Vector3(-float(dx), 1.0, -float(dz)).normalized()
+
+            c_rgb = color_grid[i, j]
+            col_v = hou.Vector3(float(np.clip(c_rgb[0], 0.0, 1.0)),
+                                float(np.clip(c_rgb[1], 0.0, 1.0)),
+                                float(np.clip(c_rgb[2], 0.0, 1.0)))
 
             p_t = geo.createPoint()
             p_t.setPosition(hou.Vector3(x_val, y_val, z_val))
+            p_t.setAttribValue(n_attrib, n_top)
+            p_t.setAttribValue(cd_attrib, col_v)
+            p_t.setAttribValue(uv_attrib, hou.Vector3(u_val, v_val, 0.0))
             pt_top[(i, j)] = p_t
 
             p_b = geo.createPoint()
             p_b.setPosition(hou.Vector3(x_val, base_y, z_val))
+            p_b.setAttribValue(n_attrib, hou.Vector3(0.0, -1.0, 0.0))
+            p_b.setAttribValue(cd_attrib, hou.Vector3(float(avg_col[0] * 0.7), float(avg_col[1] * 0.7), float(avg_col[2] * 0.7)))
+            p_b.setAttribValue(uv_attrib, hou.Vector3(u_val, v_val, 0.0))
             pt_base[(i, j)] = p_b
 
     # A. Top quads
@@ -300,16 +339,12 @@ def reconstruct_heightfield_prop(
         poly.addVertex(pt_base[(nx-1, j+1)])
         poly.addVertex(pt_top[(nx-1, j+1)])
 
-    # 3. Add vertex normals
-    geo.computeVertexNormals()
-
     # Determine default output path
     if not output_path:
         out_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/props"
-        os.makedirs(out_dir, exist_ok=True)
         output_path = os.path.join(out_dir, "prop_heightfield.bgeo.sc").replace("\\", "/")
 
-    norm_path = output_path.replace("\\", "/")
+    norm_path = os.path.abspath(output_path).replace("\\", "/")
     os.makedirs(os.path.dirname(norm_path), exist_ok=True)
     geo.saveToFile(norm_path)
     return norm_path
@@ -321,6 +356,7 @@ def reconstruct_vdb_prop(
     radius_scale=1.2,
     smooth_iterations=1,
     adaptivity=0.01,
+    colors=None,
     output_path=None,
 ):
     """
@@ -334,6 +370,7 @@ def reconstruct_vdb_prop(
         radius_scale: Multiplier on splat particle radius (default 1.2x).
         smooth_iterations: Number of Gaussian/Laplacian smoothing steps (default 1).
         adaptivity: Polygon mesh adaptivity (default 0.01 for clean topology).
+        colors: Optional (N, 3) float32 point RGB colors to transfer to mesh.
         output_path: Destination .bgeo.sc or .usd file path.
 
     Returns:
@@ -345,18 +382,24 @@ def reconstruct_vdb_prop(
     # Determine default output path
     if not output_path:
         out_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/props"
-        os.makedirs(out_dir, exist_ok=True)
         output_path = os.path.join(out_dir, "prop_vdb.bgeo.sc").replace("\\", "/")
 
-    norm_path = output_path.replace("\\", "/")
+    norm_path = os.path.abspath(output_path).replace("\\", "/")
     os.makedirs(os.path.dirname(norm_path), exist_ok=True)
 
     # 1. Create temporary particle geometry
     pt_geo = hou.Geometry()
     pt_geo.addAttrib(hou.attribType.Point, "pscale", float(voxel_size * 1.1))
-    for p_pos in points:
+    has_cols = colors is not None and len(colors) == len(points)
+    if has_cols:
+        cd_att = pt_geo.addAttrib(hou.attribType.Point, "Cd", hou.Vector3(0.5, 0.5, 0.5))
+
+    for idx, p_pos in enumerate(points):
         p = pt_geo.createPoint()
         p.setPosition(hou.Vector3(float(p_pos[0]), float(p_pos[1]), float(p_pos[2])))
+        if has_cols:
+            c = colors[idx]
+            p.setAttribValue(cd_att, hou.Vector3(float(c[0]), float(c[1]), float(c[2])))
 
     temp_pts_file = os.path.join(os.path.dirname(norm_path), "_temp_splat_pts.bgeo.sc").replace("\\", "/")
     pt_geo.saveToFile(temp_pts_file)
@@ -392,8 +435,19 @@ def reconstruct_vdb_prop(
         normal_sop = sop_net.createNode("normal", "add_normals")
         normal_sop.setInput(0, convert_sop)
 
+        last_node = normal_sop
+        if has_cols:
+            # Transfer vertex colors from particle points onto converted mesh
+            transfer_sop = sop_net.createNode("attribtransfer", "transfer_colors")
+            transfer_sop.setInput(0, normal_sop)
+            transfer_sop.setInput(1, file_in)
+            transfer_sop.parm("pointattriblist").set("Cd")
+            transfer_sop.parm("primattriblist").set("")
+            transfer_sop.parm("thresholddist").set(float(voxel_size * 2.5))
+            last_node = transfer_sop
+
         out_sop = sop_net.createNode("rop_geometry", "save_vdb_mesh")
-        out_sop.setInput(0, normal_sop)
+        out_sop.setInput(0, last_node)
         out_sop.parm("sopoutput").set(norm_path)
         out_sop.parm("execute").pressButton()
 
@@ -405,3 +459,76 @@ def reconstruct_vdb_prop(
                 os.remove(temp_pts_file)
             except OSError:
                 pass
+
+
+def reconstruct_prop_cluster(
+    prop,
+    method="auto",
+    floor_y=0.0,
+    voxel_res=0.035,
+    output_dir=None,
+):
+    """
+    High-level dispatcher for reconstructing a detected interior prop cluster
+    into a clean 3D polygonal geometry mesh (.bgeo.sc) for Houdini Solaris.
+
+    Args:
+        prop: Prop dictionary containing 'name', 'points', 'colors', etc.
+        method: 'auto', 'heightfield', or 'vdb'.
+        floor_y: Room floor Y elevation in meters.
+        voxel_res: Mesh resolution in meters (e.g. 0.035 = 3.5cm).
+        output_dir: Destination directory for saved meshes (defaults to scenes/props).
+
+    Returns:
+        Absolute filepath to the saved .bgeo.sc mesh, or None.
+    """
+    pts = prop.get("points")
+    if pts is None or len(pts) == 0:
+        return None
+
+    if not output_dir:
+        output_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/props"
+        if "hou" in sys.modules and hou and hasattr(hou, "expandString"):
+            hip = hou.expandString("$HIP")
+            if hip and hip != "." and "houdini_temp" not in hip:
+                output_dir = os.path.join(hip, "scenes", "props").replace("\\", "/")
+
+    os.makedirs(output_dir, exist_ok=True)
+    p_name = prop.get("name", "prop")
+
+    # Determine method
+    actual_method = method.lower()
+    if actual_method in ("auto", "mesh_auto"):
+        actual_method = prop.get("suggested_method", "vdb")
+    elif "heightfield" in actual_method or "depth" in actual_method:
+        actual_method = "heightfield"
+    elif "vdb" in actual_method:
+        actual_method = "vdb"
+    else:
+        actual_method = "vdb"
+
+    out_file = os.path.join(output_dir, f"{p_name}_{actual_method}.bgeo.sc").replace("\\", "/")
+    cols = prop.get("colors")
+
+    if actual_method == "heightfield":
+        res = reconstruct_heightfield_prop(
+            points=pts,
+            floor_y=floor_y,
+            grid_res=max(0.015, min(0.08, voxel_res)),
+            skirt_to_floor=True,
+            colors=cols,
+            output_path=out_file,
+        )
+    else:
+        res = reconstruct_vdb_prop(
+            points=pts,
+            voxel_size=max(0.015, min(0.08, voxel_res)),
+            radius_scale=1.2,
+            smooth_iterations=1,
+            adaptivity=0.01,
+            colors=cols,
+            output_path=out_file,
+        )
+
+    return res
+

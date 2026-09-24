@@ -616,6 +616,7 @@ class GaussianSplatScene:
 
             # Convert back to caller's coordinate space
             inv_s = 1.0 / scale_to_m
+            sub_step = max(1, len(c_pts) // 1500)
             props.append({
                 "name": "lamp_ceiling",
                 "kind": "lamp",
@@ -630,6 +631,9 @@ class GaussianSplatScene:
                 "color": [float(v) for v in np.clip(c_cols.mean(axis=0), 0.1, 0.95)],
                 "splat_count": len(c_pts),
                 "is_light": True,
+                "suggested_method": "vdb",
+                "points": (c_pts[::sub_step] * inv_s).astype(np.float32),
+                "colors": (c_cols[::sub_step]).astype(np.float32),
             })
 
         # -------------------------------------------------------------
@@ -655,6 +659,7 @@ class GaussianSplatScene:
                     span = c_pts.max(axis=0) - c_pts.min(axis=0)
                     rad_m = float(max(0.25, min(0.65, max(span[0], span[2]) * 0.25)))
                     inv_s = 1.0 / scale_to_m
+                    sub_step = max(1, len(c_pts) // 1500)
                     props.append({
                         "name": tree_name,
                         "kind": "plant",
@@ -668,6 +673,9 @@ class GaussianSplatScene:
                         "size": [float(rad_m * 2 * inv_s), float(h_span_m * inv_s), float(rad_m * 2 * inv_s)],
                         "color": [float(v) for v in np.clip(c_cols.mean(axis=0), 0.05, 0.95)],
                         "splat_count": len(c_pts),
+                        "suggested_method": "vdb",
+                        "points": (c_pts[::sub_step] * inv_s).astype(np.float32),
+                        "colors": (c_cols[::sub_step]).astype(np.float32),
                     })
 
         # -------------------------------------------------------------
@@ -690,6 +698,7 @@ class GaussianSplatScene:
             t_w_m = float(max(0.70, min(2.0, span[0])))
             t_d_m = float(max(0.70, min(2.0, span[2])))
             inv_s = 1.0 / scale_to_m
+            sub_step = max(1, len(c_pts) // 1500)
             props.append({
                 "name": "table_center",
                 "kind": "table",
@@ -703,6 +712,9 @@ class GaussianSplatScene:
                 "size": [float(t_w_m * inv_s), float(t_h_m * inv_s), float(t_d_m * inv_s)],
                 "color": [float(v) for v in np.clip(c_cols.mean(axis=0), 0.05, 0.95)],
                 "splat_count": len(c_pts),
+                "suggested_method": "heightfield",
+                "points": (c_pts[::sub_step] * inv_s).astype(np.float32),
+                "colors": (c_cols[::sub_step]).astype(np.float32),
             })
 
         # -------------------------------------------------------------
@@ -727,6 +739,7 @@ class GaussianSplatScene:
                 sh_w_m = float(max(1.0, min(w_m - 1.2, span[0])))
                 sh_d_m = float(max(0.35, min(0.80, span[2])))
                 inv_s = 1.0 / scale_to_m
+                sub_step = max(1, len(c_pts) // 1500)
                 props.append({
                     "name": sh_name,
                     "kind": "shelf",
@@ -740,6 +753,9 @@ class GaussianSplatScene:
                     "size": [float(sh_w_m * inv_s), float(sh_h_m * inv_s), float(sh_d_m * inv_s)],
                     "color": [float(v) for v in np.clip(c_cols.mean(axis=0), 0.05, 0.95)],
                     "splat_count": len(c_pts),
+                    "suggested_method": "heightfield",
+                    "points": (c_pts[::sub_step] * inv_s).astype(np.float32),
+                    "colors": (c_cols[::sub_step]).astype(np.float32),
                 })
 
         # -------------------------------------------------------------
@@ -848,6 +864,8 @@ class GaussianSplatScene:
                     shape = "cylinder" if kind == "column" else ("sphere" if kind == "fixture" else "box")
 
                 inv_s = 1.0 / scale_to_m
+                sub_step = max(1, len(c_pts) // 1500)
+                suggested_m = "heightfield" if kind in ("table", "shelf", "sofa") else "vdb"
                 props.append({
                     "name": name,
                     "kind": kind,
@@ -861,6 +879,9 @@ class GaussianSplatScene:
                     "size": [float(obb_wid_m * inv_s), float(obb_hgt_m * inv_s), float(obb_len_m * inv_s)],
                     "color": [float(c) for c in avg_col],
                     "splat_count": len(c_pts),
+                    "suggested_method": suggested_m,
+                    "points": (c_pts[::sub_step] * inv_s).astype(np.float32),
+                    "colors": (c_cols[::sub_step]).astype(np.float32),
                 })
 
         return props
