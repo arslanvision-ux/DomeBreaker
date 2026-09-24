@@ -1635,6 +1635,14 @@ def wire_solaris_stage_stream(stage_node):
     return tail
 
 
+def reconnect_stage_network(stage_node):
+    """
+    Alias for wire_solaris_stage_stream for backwards compatibility.
+    Wires all Solaris stage nodes into a strictly acyclic linear pipeline stream.
+    """
+    return wire_solaris_stage_stream(stage_node)
+
+
 def build_usd_room_architecture(
     stage_node,
     room_data,

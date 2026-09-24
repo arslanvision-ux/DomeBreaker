@@ -6199,7 +6199,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                         pass
 
                 from hdri_match_solaris import lop_splat
-                lop_splat.reconnect_stage_network(stage_node)
+                lop_splat.wire_solaris_stage_stream(stage_node)
 
                 self.log(f"Native Splats (BakeGS) {'SHOWN' if is_visible else 'HIDDEN'} in viewport.", "INFO")
                 if hasattr(self, 'btn_display_bakegs'):
@@ -6265,7 +6265,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 pass
 
             from hdri_match_solaris import lop_splat
-            lop_splat.reconnect_stage_network(stage_node)
+            lop_splat.wire_solaris_stage_stream(stage_node)
 
             self.log(f"Native Splats (BakeGS) loaded in Solaris viewport & /stage: {sop_imp.path()}", "SUCCESS")
             if hasattr(self, 'btn_display_bakegs'):
