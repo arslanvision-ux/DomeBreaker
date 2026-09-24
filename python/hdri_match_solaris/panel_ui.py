@@ -130,6 +130,16 @@ class DropLabel(QtWidgets.QLabel):
         if event.button() == QtCore.Qt.LeftButton:
             self.double_clicked.emit()
         super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event):
+        p = self.parent()
+        while p is not None:
+            if hasattr(p, "_show_preview_context_menu"):
+                if p._show_preview_context_menu(self, event.globalPos()):
+                    return
+            p = p.parent()
+        super().contextMenuEvent(event)
+
     def dragEnterEvent(self, event):
         mime = event.mimeData()
         if mime.hasUrls() or mime.hasText():
@@ -171,6 +181,15 @@ class ClickablePreviewLabel(QtWidgets.QLabel):
         if event.button() == QtCore.Qt.LeftButton:
             self.double_clicked.emit()
         super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event):
+        p = self.parent()
+        while p is not None:
+            if hasattr(p, "_show_preview_context_menu"):
+                if p._show_preview_context_menu(self, event.globalPos()):
+                    return
+            p = p.parent()
+        super().contextMenuEvent(event)
 
 
 class SliderDoubleSpinBox(QtWidgets.QWidget):
@@ -302,17 +321,52 @@ class SliderDoubleSpinBox(QtWidgets.QWidget):
         self.slider.setToolTip(tip)
         self.spin.setToolTip(tip)
 
+class ColorSamplerEventFilter(QtCore.QObject):
+    """
+    Application-level event filter for interactive eyedropper sampling from Plate preview or screen.
+    """
+    def __init__(self, panel, parent=None):
+        super().__init__(parent)
+        self.panel = panel
+
+    def eventFilter(self, watched, event):
+        if not getattr(self.panel, '_active_color_sampler', None):
+            return super().eventFilter(watched, event)
+
+        etype = event.type()
+        if etype == QtCore.QEvent.MouseButtonPress:
+            if event.button() == QtCore.Qt.LeftButton:
+                gpos = event.globalPos()
+                w = QtWidgets.QApplication.widgetAt(gpos)
+                self.panel._finish_color_sampling_at(w, gpos)
+                return True
+            elif event.button() == QtCore.Qt.RightButton:
+                self.panel.stop_color_sampling()
+                return True
+        elif etype == QtCore.QEvent.KeyPress:
+            if event.key() == QtCore.Qt.Key_Escape:
+                self.panel.stop_color_sampling()
+                return True
+        elif etype == QtCore.QEvent.MouseMove:
+            gpos = event.globalPos()
+            w = QtWidgets.QApplication.widgetAt(gpos)
+            self.panel._show_color_sampling_hover(w, gpos)
+
+        return super().eventFilter(watched, event)
+
+
 class ColorPickerWidget(QtWidgets.QWidget):
     """
-    Visual color swatch + reset button + live R, G, B tint sliders.
+    Visual color swatch + plate/screen eyedropper pick button + reset button + live R, G, B tint sliders.
     Emits colorChanged(tuple).
     """
     colorChanged = QtCore.Signal(tuple)
 
-    def __init__(self, default_color=(1.0, 1.0, 1.0), label="Color", parent=None):
+    def __init__(self, default_color=(1.0, 1.0, 1.0), label="Color", panel=None, parent=None):
         super().__init__(parent)
         self._color = list(default_color)
         self._label = label
+        self.panel = panel
 
         main_lay = QtWidgets.QVBoxLayout(self)
         main_lay.setContentsMargins(0, 0, 0, 0)
@@ -320,12 +374,24 @@ class ColorPickerWidget(QtWidgets.QWidget):
 
         top_bar = QtWidgets.QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
-        top_bar.setSpacing(6)
+        top_bar.setSpacing(5)
 
         self.btn_swatch = QtWidgets.QPushButton()
         self.btn_swatch.setFixedHeight(22)
         self.btn_swatch.setCursor(QtCore.Qt.PointingHandCursor)
         self.btn_swatch.setToolTip(f"Click to open Color Picker dialog for {self._label}")
+
+        self.btn_pick = QtWidgets.QPushButton("🎯 Pick")
+        self.btn_pick.setCheckable(True)
+        self.btn_pick.setChecked(False)
+        self.btn_pick.setFixedHeight(22)
+        self.btn_pick.setToolTip(f"Sample color for {self._label} directly from Target Plate preview or screen.\nClick here, then click on the Plate (or press Esc to cancel).")
+        self.btn_pick.setStyleSheet(
+            "QPushButton { font-size: 10px; font-weight: bold; background: #262626; color: #aaa; "
+            "border-radius: 3px; border: 1px solid #3a3a3a; padding: 2px 6px; } "
+            "QPushButton:hover { color: #fff; background: #353535; border-color: #e67e22; } "
+            "QPushButton:checked { color: #fff; background: #d35400; border-color: #ff9f43; font-weight: bold; }"
+        )
 
         self.btn_toggle_rgb = QtWidgets.QPushButton("▸ RGB")
         self.btn_toggle_rgb.setCheckable(True)
@@ -348,6 +414,7 @@ class ColorPickerWidget(QtWidgets.QWidget):
         )
 
         top_bar.addWidget(self.btn_swatch, 1)
+        top_bar.addWidget(self.btn_pick, 0)
         top_bar.addWidget(self.btn_toggle_rgb, 0)
         top_bar.addWidget(self.btn_reset, 0)
         main_lay.addLayout(top_bar)
@@ -378,11 +445,38 @@ class ColorPickerWidget(QtWidgets.QWidget):
         self._update_swatch()
 
         self.btn_swatch.clicked.connect(self._on_choose_color)
+        self.btn_pick.toggled.connect(self._on_pick_toggled)
         self.btn_toggle_rgb.toggled.connect(self._on_toggle_rgb)
         self.btn_reset.clicked.connect(self._on_reset)
         self.sld_r.valueChanged.connect(self._on_slider_changed)
         self.sld_g.valueChanged.connect(self._on_slider_changed)
         self.sld_b.valueChanged.connect(self._on_slider_changed)
+
+    def _find_panel(self):
+        if self.panel is not None:
+            return self.panel
+        p = self.parent()
+        while p is not None:
+            if hasattr(p, 'start_color_sampling') and hasattr(p, 'sample_color_at'):
+                self.panel = p
+                return p
+            p = p.parent()
+        return None
+
+    def _on_pick_toggled(self, checked):
+        panel = self._find_panel()
+        if panel:
+            if checked:
+                panel.start_color_sampling(self)
+            else:
+                panel.stop_color_sampling()
+        else:
+            self.btn_pick.setChecked(False)
+
+    def setPickActive(self, active):
+        self.btn_pick.blockSignals(True)
+        self.btn_pick.setChecked(bool(active))
+        self.btn_pick.blockSignals(False)
 
     def _update_swatch(self):
         r_c = int(np.clip(self._color[0] * 255.0, 0, 255))
@@ -579,12 +673,14 @@ class BackgroundBakeWorker(QtCore.QThread):
                     except Exception as e:
                         print(f"[DomeBreaker Worker] Multi-light inpaint error: {e}")
 
-                # 5. Horizon split with color tint
+                # 5. Horizon split with color tint & scene-linear saturation
                 if horizon_en:
                     height = float(params["horizon_height"])
                     feather = max(0.001, float(params["horizon_feather"]))
                     sky_ev = float(params["sky_ev"])
                     ground_ev = float(params["ground_ev"])
+                    sky_sat = float(params.get("sky_sat", 1.0))
+                    ground_sat = float(params.get("ground_sat", 1.0))
 
                     sky_rgb = np.array(params["sky_color"], dtype=np.float32)
                     ground_rgb = np.array(params["ground_color"], dtype=np.float32)
@@ -592,10 +688,18 @@ class BackgroundBakeWorker(QtCore.QThread):
                     sky_mult = (2.0 ** sky_ev) * sky_rgb
                     ground_mult = (2.0 ** ground_ev) * ground_rgb
 
+                    if abs(sky_sat - 1.0) > 1e-4 or abs(ground_sat - 1.0) > 1e-4:
+                        luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+                        luma_3d = luma[..., np.newaxis]
+                        sky_part = (luma_3d + sky_sat * (img - luma_3d)) * sky_mult if abs(sky_sat - 1.0) > 1e-4 else img * sky_mult
+                        ground_part = (luma_3d + ground_sat * (img - luma_3d)) * ground_mult if abs(ground_sat - 1.0) > 1e-4 else img * ground_mult
+                    else:
+                        sky_part = img * sky_mult
+                        ground_part = img * ground_mult
+
                     y_norm = 1.0 - np.linspace(0.0, 1.0, h, endpoint=False)[:, None, None]
                     sky_weight = np.clip((y_norm - (height - feather / 2.0)) / feather, 0.0, 1.0)
-                    color_mask = sky_mult[None, None, :] * sky_weight + ground_mult[None, None, :] * (1.0 - sky_weight)
-                    img *= color_mask
+                    img = sky_part * sky_weight + ground_part * (1.0 - sky_weight)
 
                 # 6. Highlight Compression (soft clip) - Hue-preserving C1 exponential rolloff
                 if softclip_en:
@@ -1138,6 +1242,8 @@ class HDRILargePreviewDialog(QtWidgets.QDialog):
                 split_x = int(ratio * tw)
 
                 if pix_h is not None:
+                    if hasattr(self.panel, 'grp_sun') and self.panel.grp_sun.isChecked() and hasattr(self.panel, '_draw_sun_reticle'):
+                        self.panel._draw_sun_reticle(pix_h)
                     h_scaled = pix_h.scaled(tw, th, QtCore.Qt.IgnoreAspectRatio, QtCore.Qt.SmoothTransformation)
                     painter.drawPixmap(0, 0, split_x, th, h_scaled, 0, 0, split_x, th)
                 if pix_p is not None:
@@ -1178,6 +1284,9 @@ class HDRILargePreviewDialog(QtWidgets.QDialog):
             h, w, c = u8.shape
             qimg = QtGui.QImage(u8.data, w, h, c * w, QtGui.QImage.Format_RGB888)
             self._cached_pixmap = QtGui.QPixmap.fromImage(qimg)
+
+        if apply_cal and hasattr(self.panel, 'grp_sun') and self.panel.grp_sun.isChecked() and hasattr(self.panel, '_draw_sun_reticle') and self._cached_pixmap:
+            self.panel._draw_sun_reticle(self._cached_pixmap)
 
         self.lbl_info.setText(info_text)
         self._display_pixmap()
@@ -1530,12 +1639,63 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
     _clean_hdri_path = staticmethod(_clean_hdri_path)
     _ensure_dome_light_latlong = staticmethod(_ensure_dome_light_latlong)
 
+    @staticmethod
+    def _get_logo_path():
+        """Resolve absolute path to the DomeBreaker logo."""
+        candidates = [
+            os.path.join(os.path.dirname(__file__), "icons", "domebreaker_logo.png"),
+            os.path.join(os.path.dirname(__file__), "icons", "domebreaker_logo_128.png"),
+            r"E:\PROJECTS\HDRI_MATCH_SOLARIS\python\hdri_match_solaris\icons\domebreaker_logo.png",
+            r"E:\PROJECTS\HDRI_MATCH_SOLARIS\screenshots\Gemini_Generated_Image_dw1ygudw1ygudw1y.jfif",
+            r"E:\PROJECTS\HDRI_MATCH_SOLARIS\screenshots\domebreaker_logo.png",
+            r"E:\PROJECTS\HDRI_MATCH_SOLARIS\houdini\toolbar\domebreaker_logo_48.png",
+            r"E:\PROJECTS\HDRI_MATCH_SOLARIS\houdini\config\Icons\domebreaker_logo.png",
+        ]
+        for env_var in ["DOMEBREAKER_ROOT", "HDRI_MATCH_SOLARIS_ROOT"]:
+            val = os.environ.get(env_var, "")
+            if val:
+                candidates.insert(0, os.path.join(val, "python", "hdri_match_solaris", "icons", "domebreaker_logo.png"))
+                candidates.insert(1, os.path.join(val, "screenshots", "Gemini_Generated_Image_dw1ygudw1ygudw1y.jfif"))
+
+        for c in candidates:
+            if os.path.isfile(c):
+                return os.path.normpath(c)
+        return ""
+
+    @classmethod
+    def _get_logo_pixmap(cls, target_size=None):
+        """Load and return high-quality QPixmap of the DomeBreaker logo."""
+        path = cls._get_logo_path()
+        if not path or not os.path.isfile(path):
+            return QtGui.QPixmap()
+        pm = QtGui.QPixmap(path)
+        if pm.isNull():
+            return pm
+        if target_size is not None and target_size > 0:
+            pm = pm.scaled(
+                target_size, target_size,
+                QtCore.Qt.KeepAspectRatio,
+                QtCore.Qt.SmoothTransformation
+            )
+        return pm
+
+    @classmethod
+    def _get_logo_icon(cls):
+        """Return QIcon of the DomeBreaker logo."""
+        path = cls._get_logo_path()
+        if path and os.path.isfile(path):
+            return QtGui.QIcon(path)
+        return QtGui.QIcon()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._initializing = True
         self._restoring_state = False
         if not parent and self.isWindow():
             self.setWindowTitle("DomeBreaker — USD Lighting & Environment Suite")
+        logo_icon = self._get_logo_icon()
+        if logo_icon and not logo_icon.isNull():
+            self.setWindowIcon(logo_icon)
         self.setMinimumWidth(380)
 
         self._pipeline = None
@@ -1559,9 +1719,16 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._baked_tint = 0.0
         self._baked_sat = 1.0
         self._baked_contrast = 1.0
+        self._active_color_sampler = None
+        self._color_sampler_filter = None
         self._bake_timer = QtCore.QTimer()
         self._bake_timer.setSingleShot(True)
         self._bake_timer.timeout.connect(self._trigger_background_bake)
+        self._sun_extract_timer = QtCore.QTimer()
+        self._sun_extract_timer.setSingleShot(True)
+        self._sun_extract_timer.timeout.connect(
+            lambda: self._extract_and_apply_sun_values() if hasattr(self, 'grp_sun') and self.grp_sun.isChecked() and (getattr(self, '_hdri_thumb_raw', None) is not None or (hasattr(self, 'txt_hdri') and self.txt_hdri.text().strip())) else None
+        )
         self._bg_bake_worker = BackgroundBakeWorker(self)
         self._bg_bake_worker.bakeFinished.connect(self._on_bg_bake_finished)
         self._bg_bake_worker.bakeFailed.connect(self._on_bg_bake_failed)
@@ -1644,6 +1811,77 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         except Exception:
             pass
 
+    def _show_about_dialog(self):
+        """Show high-polish About DomeBreaker dialog with the high-resolution logo."""
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("About DomeBreaker")
+        dlg.setModal(True)
+        dlg.resize(460, 530)
+        dlg.setStyleSheet(
+            "QDialog { background-color: #181b20; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }"
+            "QLabel { background: transparent; }"
+            "QPushButton { background-color: #2b303c; color: #fff; border: 1px solid #454d60; border-radius: 4px; padding: 6px 22px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #384050; border-color: #ffae19; color: #ffae19; }"
+        )
+
+        dlg_layout = QtWidgets.QVBoxLayout(dlg)
+        dlg_layout.setContentsMargins(24, 20, 24, 20)
+        dlg_layout.setSpacing(14)
+
+        # High-res Logo Badge
+        logo_large = self._get_logo_pixmap(target_size=180)
+        lbl_large_logo = QtWidgets.QLabel()
+        lbl_large_logo.setAlignment(QtCore.Qt.AlignCenter)
+        if logo_large and not logo_large.isNull():
+            lbl_large_logo.setPixmap(logo_large)
+            lbl_large_logo.setFixedSize(180, 180)
+            lbl_large_logo.setScaledContents(True)
+            lbl_large_logo.setStyleSheet("border: 2px solid #d48817; border-radius: 90px; background: #0c0e12;")
+        dlg_layout.addWidget(lbl_large_logo, 0, QtCore.Qt.AlignCenter)
+
+        # Title & Version
+        title_box = QtWidgets.QVBoxLayout()
+        title_box.setSpacing(2)
+        lbl_t = QtWidgets.QLabel("DOMEBREAKER")
+        lbl_t.setAlignment(QtCore.Qt.AlignCenter)
+        lbl_t.setStyleSheet("font-size: 20px; font-weight: 900; color: #ffae19; letter-spacing: 2px;")
+
+        lbl_v = QtWidgets.QLabel("v2.0.0 — Solaris USD Lighting & Environment Suite")
+        lbl_v.setAlignment(QtCore.Qt.AlignCenter)
+        lbl_v.setStyleSheet("font-size: 11px; font-weight: bold; color: #5dade2; letter-spacing: 0.8px;")
+        title_box.addWidget(lbl_t)
+        title_box.addWidget(lbl_v)
+        dlg_layout.addLayout(title_box)
+
+        # Features list
+        feat_frame = QtWidgets.QFrame()
+        feat_frame.setStyleSheet(
+            "background-color: #21252d; border: 1px solid #363d4a; border-radius: 6px; padding: 12px;"
+        )
+        feat_layout = QtWidgets.QVBoxLayout(feat_frame)
+        feat_layout.setSpacing(6)
+
+        features = [
+            "⚡ <b>Physical Sun Relighting:</b> Perez all-weather sky reconstruction & CCT.",
+            "💡 <b>Multi-Light Extraction:</b> Automatic cluster detection & inpainting.",
+            "📐 <b>HDRI Room Analyzer:</b> Manhattan-world boundary fitting & camera anchoring.",
+            "🌐 <b>Ground & Room Projection:</b> Real-time local IBL parallax in Solaris.",
+            "🔮 <b>SplatForge:</b> 3D Gaussian Splats to USD environment reconstruction.",
+            "🔥 <b>Crucible Light Studio:</b> Multi-studio light fixture & gobo library.",
+        ]
+        for f in features:
+            flbl = QtWidgets.QLabel(f)
+            flbl.setStyleSheet("font-size: 11px; color: #cfd8dc; line-height: 1.4;")
+            feat_layout.addWidget(flbl)
+        dlg_layout.addWidget(feat_frame)
+
+        # Close button
+        btn_close = QtWidgets.QPushButton("Close")
+        btn_close.clicked.connect(dlg.accept)
+        dlg_layout.addWidget(btn_close, 0, QtCore.Qt.AlignCenter)
+
+        dlg.exec_()
+
     # ------------------------------------------------------------------
     # UI Construction
     # ------------------------------------------------------------------
@@ -1654,16 +1892,66 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         main_layout.setContentsMargins(6, 6, 6, 6)
         main_layout.setSpacing(4)
 
-        # Title bar
+        # Title bar & Logo Header
         title_layout = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel("⚡ DomeBreaker")
-        title.setStyleSheet(
-            "font-size: 16px; font-weight: bold; color: #FFaa00; "
-            "padding: 4px; background: #2a2a2a; border-radius: 4px;"
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(6)
+
+        self.header_card = QtWidgets.QFrame()
+        self.header_card.setObjectName("domebreaker_header_card")
+        self.header_card.setStyleSheet(
+            "QFrame#domebreaker_header_card {"
+            "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #181b20, stop:0.5 #22262f, stop:1 #1a1c22);"
+            "  border: 1px solid #383e4a;"
+            "  border-radius: 5px;"
+            "  padding: 2px;"
+            "}"
+            "QFrame#domebreaker_header_card:hover {"
+            "  border-color: #d48817;"
+            "}"
         )
-        title.setAlignment(QtCore.Qt.AlignCenter)
+        header_card_layout = QtWidgets.QHBoxLayout(self.header_card)
+        header_card_layout.setContentsMargins(6, 3, 10, 3)
+        header_card_layout.setSpacing(10)
+
+        # Logo Icon
+        self.lbl_logo = QtWidgets.QLabel()
+        logo_pm = self._get_logo_pixmap(target_size=40)
+        if logo_pm and not logo_pm.isNull():
+            self.lbl_logo.setPixmap(logo_pm)
+            self.lbl_logo.setFixedSize(40, 40)
+            self.lbl_logo.setScaledContents(True)
+            self.lbl_logo.setStyleSheet(
+                "border: 1.5px solid #d48817; border-radius: 20px; background: #0c0e12;"
+            )
+        self.lbl_logo.setCursor(QtCore.Qt.PointingHandCursor)
+        self.lbl_logo.setToolTip("Click to view DomeBreaker Info & Overview")
+        self.lbl_logo.mousePressEvent = lambda ev: self._show_about_dialog()
+
+        # Text labels
+        text_layout = QtWidgets.QVBoxLayout()
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(1)
+
+        self.title_lbl = QtWidgets.QLabel("DOMEBREAKER")
+        self.title_lbl.setStyleSheet(
+            "font-size: 15px; font-weight: 900; color: #ffae19; letter-spacing: 1.5px; background: transparent; border: none;"
+        )
+        self.subtitle_lbl = QtWidgets.QLabel("HOUDINI HDRI & SOLARIS USD SUITE")
+        self.subtitle_lbl.setStyleSheet(
+            "font-size: 9px; font-weight: 700; color: #5dade2; letter-spacing: 0.8px; background: transparent; border: none;"
+        )
+        text_layout.addWidget(self.title_lbl)
+        text_layout.addWidget(self.subtitle_lbl)
+
+        header_card_layout.addWidget(self.lbl_logo, 0, QtCore.Qt.AlignVCenter)
+        header_card_layout.addLayout(text_layout, 1)
+
+        self.header_card.setCursor(QtCore.Qt.PointingHandCursor)
+        self.header_card.mousePressEvent = lambda ev: self._show_about_dialog()
+        self.title = self.header_card
         
-        self.btn_reload = QtWidgets.QPushButton("ð Reload Tool")
+        self.btn_reload = QtWidgets.QPushButton("🔄 Reload Tool")
         self.btn_reload.setToolTip("Completely reload all Python modules and refresh the panel UI")
         self.btn_reload.setStyleSheet(
             "QPushButton { background-color: #1e334a; color: #00d2ff; font-weight: bold; "
@@ -1721,13 +2009,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         )
         self.btn_collapse_all.clicked.connect(self._collapse_all_sections)
 
-        title_layout.addWidget(title, 1)
+        title_layout.addWidget(self.header_card, 1)
         title_layout.addWidget(self.btn_expand_all, 0)
         title_layout.addWidget(self.btn_collapse_all, 0)
         title_layout.addWidget(self.btn_toggle_crucible, 0)
-        title_layout.addWidget(self.btn_read_stage, 0)
         title_layout.addWidget(self.btn_reset_defaults, 0)
         title_layout.addWidget(self.btn_reload, 0)
+        self.btn_reload.hide()
         self.btn_read_stage.hide()
         main_layout.addLayout(title_layout)
 
@@ -6450,13 +6738,21 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.sld_sky_ev = SliderDoubleSpinBox(-10.0, 10.0, 0.1, 0.0, decimals=2)
         lay.addRow("Sky EV:", self.sld_sky_ev)
 
-        self.col_sky = ColorPickerWidget(default_color=(1.0, 1.0, 1.0), label="Sky")
+        self.sld_sky_sat = SliderDoubleSpinBox(0.0, 3.0, 0.01, 1.0, decimals=2)
+        self.sld_sky_sat.setToolTip("Scene-linear chroma saturation scale for the sky dome (1.0 = neutral, 0.0 = monochrome, >1.0 = boost).")
+        lay.addRow("Sky Sat:", self.sld_sky_sat)
+
+        self.col_sky = ColorPickerWidget(default_color=(1.0, 1.0, 1.0), label="Sky", panel=self)
         lay.addRow("Sky Color:", self.col_sky)
 
         self.sld_ground_ev = SliderDoubleSpinBox(-10.0, 10.0, 0.1, 0.0, decimals=2)
         lay.addRow("Ground EV:", self.sld_ground_ev)
 
-        self.col_ground = ColorPickerWidget(default_color=(1.0, 1.0, 1.0), label="Ground")
+        self.sld_ground_sat = SliderDoubleSpinBox(0.0, 3.0, 0.01, 1.0, decimals=2)
+        self.sld_ground_sat.setToolTip("Scene-linear chroma saturation scale for the ground hemisphere (1.0 = neutral, 0.0 = monochrome, >1.0 = boost).")
+        lay.addRow("Ground Sat:", self.sld_ground_sat)
+
+        self.col_ground = ColorPickerWidget(default_color=(1.0, 1.0, 1.0), label="Ground", panel=self)
         lay.addRow("Ground Color:", self.col_ground)
 
         self._scroll_layout.addWidget(sec)
@@ -7387,20 +7683,20 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_merge_networks.setVisible(False)  # Hidden as network auto-merges automatically
         lay.addWidget(self.btn_merge_networks)
 
-        row_bake = QtWidgets.QHBoxLayout()
-        self.btn_bake_hdri = QtWidgets.QPushButton("💾 Bake Calibrated HDRI to $HIP")
-        self.btn_bake_hdri.setStyleSheet(
-            "background-color: #0088cc; color: white; "
-            "font-weight: bold; padding: 6px;"
-        )
-        self.btn_bake_hdri.setToolTip("Process Horizon Split & Soft-Clip, save calibrated EXR to scene $HIP folder, and update Dome Light.")
-        self.btn_bake_hdri.setVisible(False)  # Hidden: automatically baked on 'Create Full LOP Network'
         self.chk_auto_bake = QtWidgets.QCheckBox("⚡ Live Viewport Sync")
         self.chk_auto_bake.setChecked(True)
         self.chk_auto_bake.setToolTip("Automatically bake calibrated HDRI in a background worker thread and update viewport Dome Light in real-time.")
-        row_bake.addWidget(self.btn_bake_hdri)
-        row_bake.addWidget(self.chk_auto_bake)
-        lay.addLayout(row_bake)
+        lay.addWidget(self.chk_auto_bake)
+
+        self.btn_bake_hdri = QtWidgets.QPushButton("💾 Bake Calibrated HDRI & Textures to $HIP")
+        self.btn_bake_hdri.setStyleSheet(
+            "QPushButton { background-color: #1a5276; color: #ffffff; font-weight: bold; padding: 8px; font-size: 11px; border-radius: 4px; border: 1px solid #2980b9; }"
+            "QPushButton:hover { background-color: #2471a3; color: #ffffff; }"
+            "QPushButton:pressed { background-color: #154360; }"
+        )
+        self.btn_bake_hdri.setToolTip("Process all calibrations, inpainting, and projections, write calibrated 32-bit float EXR maps to $HIP/hdri_match/, and update Dome Light for publishing or farm rendering.")
+        self.btn_bake_hdri.setVisible(True)
+        lay.addWidget(self.btn_bake_hdri)
 
         # Hidden individual action buttons (their actions trigger automatically when their corresponding section checkboxes are enabled)
         self.btn_calibrate = QtWidgets.QPushButton("Run Calibration")
@@ -7415,15 +7711,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_detect_sun = QtWidgets.QPushButton("Detect Sun")
         self.btn_detect_sun.setVisible(False)
 
+        # Single projection mesh button is maintained in Ground & Room Projection section (self.btn_create_ground_geometry)
         self.btn_action_projection = QtWidgets.QPushButton("📐 Build Solaris USD Projection Mesh")
-        self.btn_action_projection.setStyleSheet(
-            "QPushButton { background-color: #1a334d; color: #00d2ff; font-weight: bold; padding: 7px; font-size: 11px; border-radius: 4px; border: 1px solid #2e6b9e; }"
-            "QPushButton:hover { background-color: #264d73; color: #ffffff; }"
-        )
-        self.btn_action_projection.setToolTip("Generates or updates the 3D ground plane or interior room box projection mesh in /stage.")
-        self.btn_action_projection.setVisible(True)
-        self.btn_action_projection.clicked.connect(self._create_or_update_ground_projection)
-        lay.addWidget(self.btn_action_projection)
+        self.btn_action_projection.setVisible(False)
 
         self.btn_action_aovs = QtWidgets.QPushButton("🏷️ Light Groups")
         self.btn_action_aovs.setVisible(False)
@@ -7642,9 +7932,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.lbl_single_plate.setMinimumHeight(110)
         self.lbl_single_plate.setMaximumHeight(150)
         self.lbl_single_plate.setCursor(QtCore.Qt.PointingHandCursor)
-        self.lbl_single_plate.setToolTip("Double-click to open large Plate inspector")
-        self.lbl_single_plate.setStyleSheet("background-color: #151515; border: 1px solid #333; border-radius: 4px; color: #777;")
         self.lbl_single_plate.mouseDoubleClickEvent = lambda e: self._open_large_preview("plate")
+        self.lbl_single_plate.contextMenuEvent = lambda e: self._show_preview_context_menu(self.lbl_single_plate, e.globalPos())
+        self.lbl_single_plate.setToolTip("Double-click to open large Plate inspector | Right-click to sample colors")
         sp_lay.addWidget(self.lbl_single_plate)
         self.preview_stack.addWidget(single_p_widget)
 
@@ -7685,6 +7975,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 self._plate_thumb_raw = self._csm.transform_image(
                     self._plate_orig_thumb.copy(), plate_cs, "Linear"
                 )
+                p_luma = 0.2126 * self._plate_thumb_raw[..., 0] + 0.7152 * self._plate_thumb_raw[..., 1] + 0.0722 * self._plate_thumb_raw[..., 2]
+                p_p98 = float(np.percentile(p_luma, 98))
+                self._plate_base_norm = (0.9 / max(1e-5, p_p98))
 
             if hasattr(self, '_plate_orig_full') and self._plate_orig_full is not None:
                 self._plate_full_array = self._csm.transform_image(
@@ -8519,7 +8812,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         # Auto-sync native stage lights and live preview when calibration parameters change
         for w in [self.sld_ev, self.sld_black, self.sld_temp, self.sld_tint, self.sld_yaw,
                   self.sld_sat, self.sld_contrast,
-                  self.sld_horizon_height, self.sld_horizon_feather, self.sld_sky_ev, self.sld_ground_ev,
+                  self.sld_horizon_height, self.sld_horizon_feather, self.sld_sky_ev, self.sld_sky_sat, self.sld_ground_ev, self.sld_ground_sat,
                   self.sld_softclip_thresh, self.sld_softclip_rolloff,
                   self.sld_sun_u, self.sld_sun_v, self.sld_sun_radius, self.sld_sun_angle,
                   self.sld_sun_intensity, self.sld_sun_exposure, self.sld_sun_cct,
@@ -8601,6 +8894,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             if w is not None:
                 w.toggled.connect(self._sync_node)
 
+        if hasattr(self, 'chk_auto_detect_sun'):
+            self.chk_auto_detect_sun.toggled.connect(
+                lambda chk: self._detect_sun(notify_ui=False) if chk and (getattr(self, '_hdri_thumb_raw', None) is not None or (hasattr(self, 'txt_hdri') and self.txt_hdri.text().strip())) else None
+            )
         if hasattr(self, 'chk_sun_reconstruct'):
             self.chk_sun_reconstruct.toggled.connect(self._on_sun_reconstruct_toggled)
         if hasattr(self, 'sld_sun_turbidity'):
@@ -8609,6 +8906,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.sld_sun_reconstruct_blend.valueChanged.connect(lambda _v: self._on_sun_reconstruct_changed())
         if hasattr(self, 'cmb_sun_radiometry_mode'):
             self.cmb_sun_radiometry_mode.currentIndexChanged.connect(self._on_sun_radiometry_mode_changed)
+        if hasattr(self, 'sld_sun_v'):
+            self.sld_sun_v.valueChanged.connect(lambda _v: self._on_sun_reconstruct_changed() if getattr(self, '_last_sun_clip_info', None) else None)
+        for w in [getattr(self, 'sld_sun_u', None), getattr(self, 'sld_sun_v', None), getattr(self, 'sld_sun_radius', None)]:
+            if w is not None:
+                w.valueChanged.connect(self._schedule_sun_extract)
 
         if hasattr(self, 'btn_setup_aovs'):
             self.btn_setup_aovs.clicked.connect(self._apply_light_groups_to_stage)
@@ -8634,9 +8936,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.chk_remove_sun.toggled.connect(self._update_all_previews)
 
         if hasattr(self, 'btn_bake_hdri'):
-            self.btn_bake_hdri.clicked.connect(lambda: self._bake_calibrated_hdri(notify_ui=True))
+            self.btn_bake_hdri.clicked.connect(lambda: self._bake_calibrated_hdri(notify_ui=True, force_bake=True))
 
-        for w in [self.sld_horizon_height, self.sld_horizon_feather, self.sld_sky_ev, self.sld_ground_ev,
+        for w in [self.sld_horizon_height, self.sld_horizon_feather, self.sld_sky_ev, self.sld_sky_sat, self.sld_ground_ev, self.sld_ground_sat,
                   self.sld_softclip_thresh, self.sld_softclip_rolloff,
                   self.sld_ev, self.sld_black, self.sld_temp, self.sld_tint,
                   self.sld_sat, self.sld_contrast,
@@ -8676,8 +8978,15 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         if getattr(self, '_restoring_state', False) or getattr(self, '_initializing', False):
             return
         try:
+            stage_node = self._get_stage_node()
             dome_node, sun_node = self._get_stage_lights()
             p = self._collect_parms()
+
+            # Ensure native Dome Light exists
+            if dome_node is None and stage_node and p.get("hdri_path"):
+                dome_node = stage_node.createNode("domelight", "hdri_dome")
+                self.log("Created native Solaris /stage/hdri_dome (domelight)", "DETAIL")
+                self._merge_light_networks(notify_ui=False)
 
             # 1. Update native Dome Light
             if dome_node is not None:
@@ -8703,18 +9012,32 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                         is_using_baked = True
 
                 if tex_to_use:
-                    tex_parm = dome_node.parm("xn__inputstexturefile_r3ah")
-                    if tex_parm and tex_parm.eval() != tex_to_use:
-                        tex_parm.set(tex_to_use)
+                    tex_parm = dome_node.parm("xn__inputstexturefile_r3ah") or dome_node.parm("inputs:texture:file")
+                    if tex_parm:
+                        tex_ctrl = dome_node.parm("xn__inputstexturefile_control_shbh")
+                        if tex_ctrl and tex_ctrl.eval() != "set":
+                            tex_ctrl.set("set")
+                        if tex_parm.eval() != tex_to_use:
+                            tex_parm.set(tex_to_use)
 
                 # Exposure EV: if using baked map, only apply delta relative to baked EV
                 cur_ev = float(p.get("ev", 0.0))
                 baked_ev = getattr(self, '_baked_ev', 0.0) if is_using_baked else 0.0
                 delta_ev = cur_ev - baked_ev
 
-                exp_parm = dome_node.parm("xn__inputsexposure_vya")
+                exp_parm = dome_node.parm("xn__inputsexposure_vya") or dome_node.parm("inputs:exposure")
                 if exp_parm:
+                    exp_ctrl = dome_node.parm("xn__inputsexposure_control_wcb")
+                    if exp_ctrl and exp_ctrl.eval() != "set":
+                        exp_ctrl.set("set")
                     exp_parm.set(delta_ev)
+
+                # Intensity: ensure intensity control is set
+                int_parm = dome_node.parm("xn__inputsintensity_i0a") or dome_node.parm("inputs:intensity")
+                if int_parm:
+                    int_ctrl = dome_node.parm("xn__inputsintensity_control_jeb")
+                    if int_ctrl and int_ctrl.eval() != "set":
+                        int_ctrl.set("set")
 
                 # Yaw rotation (ry)
                 ry_parm = dome_node.parm("ry")
@@ -8760,7 +9083,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
             # 2. Update native Sun Light (Distant Light)
             stage_node = self._get_stage_node()
-            if sun_node is None and stage_node and dome_node is not None and p.get("sun_en", False):
+            if sun_node is None and stage_node and p.get("sun_en", False):
                 sun_node = stage_node.createNode("distantlight", "hdri_sun")
                 self.log("Created native Solaris /stage/hdri_sun (distantlight)", "DETAIL")
                 self._merge_light_networks(notify_ui=False)
@@ -8768,39 +9091,65 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             if sun_node is not None:
                 if p.get("sun_en", False):
                     sun_node.bypass(False)
-                    angle_parm = sun_node.parm("xn__inputsangle_zta")
+
+                    # 1. Angular Size (penumbra soft shadows)
+                    angle_parm = sun_node.parm("xn__inputsangle_zta") or sun_node.parm("inputs:angle")
                     if angle_parm:
+                        angle_ctrl = sun_node.parm("xn__inputsangle_control_06a")
+                        if angle_ctrl and angle_ctrl.eval() != "set":
+                            angle_ctrl.set("set")
                         angle_parm.set(float(p.get("sun_angle", 0.53)))
 
-                    # Set Intensity
-                    int_parm = sun_node.parm("xn__inputsintensity_i0a")
-                    if int_parm is None:
-                        int_parm = sun_node.parm("inputs:intensity")
+                    # 2. Set Intensity
+                    int_parm = sun_node.parm("xn__inputsintensity_i0a") or sun_node.parm("inputs:intensity")
                     if int_parm:
+                        int_ctrl = sun_node.parm("xn__inputsintensity_control_jeb")
+                        if int_ctrl and int_ctrl.eval() != "set":
+                            int_ctrl.set("set")
                         int_parm.set(float(p.get("sun_intensity", 1.0)))
 
-                    # Set Exposure (EV)
-                    exp_parm = sun_node.parm("xn__inputsexposure_vya")
-                    if exp_parm is None:
-                        exp_parm = sun_node.parm("inputs:exposure")
+                    # 3. Set Exposure (EV)
+                    exp_parm = sun_node.parm("xn__inputsexposure_vya") or sun_node.parm("inputs:exposure")
                     if exp_parm:
+                        exp_ctrl = sun_node.parm("xn__inputsexposure_control_wcb")
+                        if exp_ctrl and exp_ctrl.eval() != "set":
+                            exp_ctrl.set("set")
                         exp_parm.set(float(p.get("sun_exposure", 0.0)))
 
-                    # Set Color Temperature
+                    # 4. Set Color Temperature vs RGB Color Tint
                     use_cct = bool(p.get("sun_use_cct", True))
-                    cct_en_parm = sun_node.parm("xn__inputsenableColorTemperature_omb")
-                    if cct_en_parm is None:
-                        cct_en_parm = sun_node.parm("inputs:enableColorTemperature")
+                    cct_en_parm = sun_node.parm("xn__inputsenableColorTemperature_omb") or sun_node.parm("inputs:enableColorTemperature")
                     if cct_en_parm:
+                        cct_en_ctrl = sun_node.parm("xn__inputsenableColorTemperature_control_pzb")
+                        if cct_en_ctrl and cct_en_ctrl.eval() != "set":
+                            cct_en_ctrl.set("set")
                         cct_en_parm.set(1 if use_cct else 0)
 
-                    cct_parm = sun_node.parm("xn__inputscolorTemperature_wcb")
-                    if cct_parm is None:
-                        cct_parm = sun_node.parm("inputs:colorTemperature")
+                    cct_parm = sun_node.parm("xn__inputscolorTemperature_wcb") or sun_node.parm("inputs:colorTemperature")
                     if cct_parm:
+                        cct_ctrl = sun_node.parm("xn__inputscolorTemperature_control_xpb")
+                        if cct_ctrl and cct_ctrl.eval() != "set":
+                            cct_ctrl.set("set")
                         cct_parm.set(float(p.get("sun_cct", 5500.0)))
 
-                    # Compute orientation from U, V matching USD DomeLight equirectangular projection
+                    # Direct RGB color tint (used when CCT is disabled)
+                    cr = sun_node.parm("xn__inputscolor_ztar")
+                    cg = sun_node.parm("xn__inputscolor_ztag")
+                    cb = sun_node.parm("xn__inputscolor_ztab")
+                    if cr and cg and cb:
+                        col_ctrl = sun_node.parm("xn__inputscolor_control_06a")
+                        if col_ctrl and col_ctrl.eval() != "set":
+                            col_ctrl.set("set")
+                        if not use_cct and hasattr(self, '_last_sun_tint') and self._last_sun_tint:
+                            cr.set(float(self._last_sun_tint[0]))
+                            cg.set(float(self._last_sun_tint[1]))
+                            cb.set(float(self._last_sun_tint[2]))
+                        else:
+                            cr.set(1.0)
+                            cg.set(1.0)
+                            cb.set(1.0)
+
+                    # 5. Compute orientation from U, V matching USD DomeLight equirectangular projection
                     # Ground-truth verified with Karma CPU path-traced shadow alignment (<0.5 deg diff)
                     u = float(p.get("sun_u", 0.5))
                     v = float(p.get("sun_v", 0.25))
@@ -8815,10 +9164,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
                     rx_parm = sun_node.parm("rx")
                     ry_parm = sun_node.parm("ry")
+                    rz_parm = sun_node.parm("rz")
                     if rx_parm:
                         rx_parm.set(rx)
                     if ry_parm:
                         ry_parm.set(ry)
+                    if rz_parm:
+                        rz_parm.set(0.0)
                 else:
                     sun_node.bypass(True)
 
@@ -9067,11 +9419,31 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _schedule_auto_bake(self, *args):
         """Ultra-fast debounced trigger (120ms) to bake calibrated HDRI in background thread."""
-        if getattr(self, '_restoring_state', False):
+        if getattr(self, '_restoring_state', False) or getattr(self, '_initializing', False):
             return
         if hasattr(self, 'chk_auto_bake') and self.chk_auto_bake.isChecked():
+            # Check if any spatial modifications requiring a physical disk texture are active
+            horizon_en = hasattr(self, 'grp_horizon') and self.grp_horizon.isChecked()
+            softclip_en = hasattr(self, 'grp_softclip') and self.grp_softclip.isChecked()
+            sun_en = hasattr(self, 'grp_sun') and self.grp_sun.isChecked()
+            sun_remove_en = sun_en and hasattr(self, 'chk_remove_sun') and self.chk_remove_sun.isChecked()
+            ground_proj_en = hasattr(self, 'grp_ground_proj') and self.grp_ground_proj.isChecked() and hasattr(self, 'chk_bake_ground_warp') and self.chk_bake_ground_warp.isChecked()
+            extract_inpaint_en = hasattr(self, 'grp_extract') and self.grp_extract.isChecked() and hasattr(self, 'chk_extract_inpaint') and self.chk_extract_inpaint.isChecked()
+            baked_manual = getattr(self, '_baked_manual', False)
+
+            if not (horizon_en or softclip_en or sun_remove_en or ground_proj_en or extract_inpaint_en or baked_manual):
+                # Pure EV offset / color balance: handled natively by Solaris dome light in real time at 60 FPS.
+                return
+
             if hasattr(self, '_bake_timer'):
                 self._bake_timer.start(120)
+
+    def _schedule_sun_extract(self, *args):
+        """Ultra-fast debounced trigger (150ms) to re-extract radiometric values at new sun UV/radius."""
+        if getattr(self, '_restoring_state', False) or getattr(self, '_initializing', False):
+            return
+        if hasattr(self, '_sun_extract_timer'):
+            self._sun_extract_timer.start(150)
 
     def _trigger_background_bake(self):
         """Assemble parameters and dispatch asynchronous background bake without freezing Houdini."""
@@ -9106,6 +9478,14 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         softclip_en = hasattr(self, 'grp_softclip') and self.grp_softclip.isChecked()
         sun_en = hasattr(self, 'grp_sun') and self.grp_sun.isChecked()
         sun_remove_en = sun_en and hasattr(self, 'chk_remove_sun') and self.chk_remove_sun.isChecked()
+        ground_proj_en = hasattr(self, 'grp_ground_proj') and self.grp_ground_proj.isChecked() and hasattr(self, 'chk_bake_ground_warp') and self.chk_bake_ground_warp.isChecked()
+        extract_inpaint_en = hasattr(self, 'grp_extract') and self.grp_extract.isChecked() and hasattr(self, 'chk_extract_inpaint') and self.chk_extract_inpaint.isChecked()
+        baked_manual = getattr(self, '_baked_manual', False)
+
+        has_spatial_mods = (horizon_en or softclip_en or sun_remove_en or ground_proj_en or extract_inpaint_en or baked_manual)
+        if not has_spatial_mods:
+            # Pure EV / color calibration is handled by dome_node parameters directly at 60 FPS
+            return
 
         # Determine export destination in $HIP
         hip_dir = hou.expandString("$HIP") or "."
@@ -9144,7 +9524,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "horizon_height": float(self.sld_horizon_height.value()),
             "horizon_feather": float(self.sld_horizon_feather.value()),
             "sky_ev": float(self.sld_sky_ev.value()),
+            "sky_sat": float(self.sld_sky_sat.value()) if hasattr(self, 'sld_sky_sat') else 1.0,
             "ground_ev": float(self.sld_ground_ev.value()),
+            "ground_sat": float(self.sld_ground_sat.value()) if hasattr(self, 'sld_ground_sat') else 1.0,
             "sky_color": list(self.col_sky.color()) if hasattr(self, 'col_sky') else [1.0, 1.0, 1.0],
             "ground_color": list(self.col_ground.color()) if hasattr(self, 'col_ground') else [1.0, 1.0, 1.0],
             "softclip_en": softclip_en,
@@ -9451,6 +9833,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         try:
             import os
             if arr is None:
+                arr = getattr(self, '_hdri_full_array', None)
+                if arr is None:
+                    arr = getattr(self, '_hdri_thumb_raw', None)
+            if arr is None:
                 hdri_path = self.txt_hdri.text()
                 if not hdri_path or not os.path.isfile(hdri_path):
                     self.log_error("Please load an HDRI first to extract sun values.")
@@ -9505,6 +9891,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.sld_sun_cct.setValue(round(data["cct"], 0))
             if hasattr(self, 'lbl_sun_cct_desc'):
                 self.lbl_sun_cct_desc.setText(data["cct_desc"])
+            self._last_sun_tint = data.get("tint", [1.0, 1.0, 1.0])
+            self._sync_node()
+            self._update_all_previews()
 
             msg = (f"Extracted Sun Values: Intensity={final_intensity:.2f} (Target={clip_info['physical_lux']:.2f}, "
                    f"Sun-to-Sky Ratio={clip_info['sun_sky_ratio']:.1f}:1, ΔEV={clip_info['ev_stops_lost']:.1f}) | "
@@ -9895,12 +10284,14 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 except Exception as e:
                     self.log(f"Warning in multi-light inpaint: {e}", "WARNING")
 
-            # 5. Horizon split with color tint
+            # 5. Horizon split with color tint & scene-linear saturation
             if horizon_en:
                 height = float(self.sld_horizon_height.value())
                 feather = max(0.001, float(self.sld_horizon_feather.value()))
                 sky_ev = float(self.sld_sky_ev.value())
                 ground_ev = float(self.sld_ground_ev.value())
+                sky_sat = float(self.sld_sky_sat.value()) if hasattr(self, 'sld_sky_sat') else 1.0
+                ground_sat = float(self.sld_ground_sat.value()) if hasattr(self, 'sld_ground_sat') else 1.0
 
                 sky_rgb = np.array(self.col_sky.color(), dtype=np.float32) if hasattr(self, 'col_sky') else np.array([1.0, 1.0, 1.0], dtype=np.float32)
                 ground_rgb = np.array(self.col_ground.color(), dtype=np.float32) if hasattr(self, 'col_ground') else np.array([1.0, 1.0, 1.0], dtype=np.float32)
@@ -9908,10 +10299,18 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 sky_mult = (2.0 ** sky_ev) * sky_rgb
                 ground_mult = (2.0 ** ground_ev) * ground_rgb
 
+                if abs(sky_sat - 1.0) > 1e-4 or abs(ground_sat - 1.0) > 1e-4:
+                    luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+                    luma_3d = luma[..., np.newaxis]
+                    sky_part = (luma_3d + sky_sat * (img - luma_3d)) * sky_mult if abs(sky_sat - 1.0) > 1e-4 else img * sky_mult
+                    ground_part = (luma_3d + ground_sat * (img - luma_3d)) * ground_mult if abs(ground_sat - 1.0) > 1e-4 else img * ground_mult
+                else:
+                    sky_part = img * sky_mult
+                    ground_part = img * ground_mult
+
                 y_norm = 1.0 - np.linspace(0.0, 1.0, h, endpoint=False)[:, None, None]
                 sky_weight = np.clip((y_norm - (height - feather / 2.0)) / feather, 0.0, 1.0)
-                color_mask = sky_mult[None, None, :] * sky_weight + ground_mult[None, None, :] * (1.0 - sky_weight)
-                img *= color_mask
+                img = sky_part * sky_weight + ground_part * (1.0 - sky_weight)
 
             # 6. Highlight Compression (soft clip) - Hue-preserving C1 exponential rolloff
             if softclip_en:
@@ -10270,7 +10669,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 self.sld_ev, self.sld_black, self.sld_temp, self.sld_tint, self.sld_yaw,
                 self.sld_sat, self.sld_contrast,
                 self.grp_horizon, self.sld_horizon_height, self.sld_horizon_feather,
-                self.sld_sky_ev, self.sld_ground_ev,
+                self.sld_sky_ev, self.sld_sky_sat, self.sld_ground_ev, self.sld_ground_sat,
                 self.grp_softclip, self.sld_softclip_thresh, self.sld_softclip_rolloff,
                 self.grp_sun, self.sld_sun_u, self.sld_sun_v, self.sld_sun_radius,
                 self.sld_sun_angle, self.sld_sun_intensity, self.sld_sun_exposure,
@@ -10353,12 +10752,16 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     self.sld_horizon_feather.setValue(float(state["horizon_f"]))
                 if "sky_ev" in state:
                     self.sld_sky_ev.setValue(float(state["sky_ev"]))
+                if "sky_sat" in state and hasattr(self, 'sld_sky_sat'):
+                    self.sld_sky_sat.setValue(float(state["sky_sat"]))
                 if "sky_color" in state and hasattr(self, 'col_sky'):
                     c = state["sky_color"]
                     if isinstance(c, (list, tuple)) and len(c) >= 3:
                         self.col_sky.setColor(c[0], c[1], c[2])
                 if "ground_ev" in state:
                     self.sld_ground_ev.setValue(float(state["ground_ev"]))
+                if "ground_sat" in state and hasattr(self, 'sld_ground_sat'):
+                    self.sld_ground_sat.setValue(float(state["ground_sat"]))
                 if "ground_color" in state and hasattr(self, 'col_ground'):
                     c = state["ground_color"]
                     if isinstance(c, (list, tuple)) and len(c) >= 3:
@@ -10648,7 +11051,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.sld_ev, self.sld_black, self.sld_temp, self.sld_tint, self.sld_yaw,
             self.sld_sat, self.sld_contrast,
             self.grp_horizon, self.sld_horizon_height, self.sld_horizon_feather,
-            self.sld_sky_ev, self.sld_ground_ev,
+            self.sld_sky_ev, self.sld_sky_sat, self.sld_ground_ev, self.sld_ground_sat,
             self.grp_softclip, self.sld_softclip_thresh, self.sld_softclip_rolloff,
             self.grp_sun, self.sld_sun_u, self.sld_sun_v, self.sld_sun_radius,
             self.sld_sun_angle, self.sld_sun_intensity, self.sld_sun_exposure,
@@ -10724,7 +11127,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.sld_horizon_height.setValue(0.0)
             self.sld_horizon_feather.setValue(0.1)
             self.sld_sky_ev.setValue(0.0)
+            if hasattr(self, 'sld_sky_sat'):
+                self.sld_sky_sat.setValue(1.0)
             self.sld_ground_ev.setValue(0.0)
+            if hasattr(self, 'sld_ground_sat'):
+                self.sld_ground_sat.setValue(1.0)
             if hasattr(self, 'col_sky'):
                 self.col_sky.setColor([1.0, 1.0, 1.0])
             if hasattr(self, 'col_ground'):
@@ -11164,6 +11571,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._hdri_orig_thumb = None
         self._hdri_full_array = None
         self._hdri_orig_full = None
+        self._hdri_base_norm = None
         self._current_calibrated_path = None
         self.reset_calibration(revert_reason="HDRI removed")
 
@@ -11197,6 +11605,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._plate_full_array = None
         self._plate_orig_full = None
         self._plate_orig_shape = None
+        self._plate_base_norm = None
         self.reset_calibration(revert_reason="Plate removed")
         self._sync_node()
         self._save_state()
@@ -11406,13 +11815,15 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 sun_r = max(0.005, float(self.sld_sun_radius.value()))
                 img = self._inpaint_sun_disc(img, sun_u, sun_v, sun_r)
 
-            # 5. Horizon Split preview with color tint
+            # 5. Horizon Split preview with color tint & scene-linear saturation
             if hasattr(self, 'grp_horizon') and self.grp_horizon.isChecked():
                 h = img.shape[0]
                 height = float(self.sld_horizon_height.value())
                 feather = max(0.001, float(self.sld_horizon_feather.value()))
                 sky_ev = float(self.sld_sky_ev.value())
                 ground_ev = float(self.sld_ground_ev.value())
+                sky_sat = float(self.sld_sky_sat.value()) if hasattr(self, 'sld_sky_sat') else 1.0
+                ground_sat = float(self.sld_ground_sat.value()) if hasattr(self, 'sld_ground_sat') else 1.0
 
                 sky_rgb = np.array(self.col_sky.color(), dtype=np.float32) if hasattr(self, 'col_sky') else np.array([1.0, 1.0, 1.0], dtype=np.float32)
                 ground_rgb = np.array(self.col_ground.color(), dtype=np.float32) if hasattr(self, 'col_ground') else np.array([1.0, 1.0, 1.0], dtype=np.float32)
@@ -11420,10 +11831,18 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 sky_mult = (2.0 ** sky_ev) * sky_rgb
                 ground_mult = (2.0 ** ground_ev) * ground_rgb
 
+                if abs(sky_sat - 1.0) > 1e-4 or abs(ground_sat - 1.0) > 1e-4:
+                    luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+                    luma_3d = luma[..., np.newaxis]
+                    sky_part = (luma_3d + sky_sat * (img - luma_3d)) * sky_mult if abs(sky_sat - 1.0) > 1e-4 else img * sky_mult
+                    ground_part = (luma_3d + ground_sat * (img - luma_3d)) * ground_mult if abs(ground_sat - 1.0) > 1e-4 else img * ground_mult
+                else:
+                    sky_part = img * sky_mult
+                    ground_part = img * ground_mult
+
                 y_norm = 1.0 - np.linspace(0.0, 1.0, h, endpoint=False)[:, None, None]
                 sky_weight = np.clip((y_norm - (height - feather / 2.0)) / feather, 0.0, 1.0)
-                color_mask = sky_mult[None, None, :] * sky_weight + ground_mult[None, None, :] * (1.0 - sky_weight)
-                img *= color_mask
+                img = sky_part * sky_weight + ground_part * (1.0 - sky_weight)
 
             # 6. Highlight Compression (soft clip) preview - Hue-preserving C1 exponential rolloff
             if hasattr(self, 'grp_softclip') and self.grp_softclip.isChecked():
@@ -11460,14 +11879,17 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             img *= norm
         else:
             # Neutral reference tone-mapping
-            luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-            if luma.size > 200000:
-                step = int(math.ceil(math.sqrt(luma.size / 100000.0)))
-                p98 = float(np.percentile(luma[::step, ::step], 98))
-            else:
-                p98 = float(np.percentile(luma, 98))
-            if p98 > 1e-6:
-                img *= (0.9 / p98)
+            norm = getattr(self, '_plate_base_norm', None)
+            if norm is None:
+                luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+                if luma.size > 200000:
+                    step = int(math.ceil(math.sqrt(luma.size / 100000.0)))
+                    p98 = float(np.percentile(luma[::step, ::step], 98))
+                else:
+                    p98 = float(np.percentile(luma, 98))
+                norm = (0.9 / max(1e-5, p98))
+                self._plate_base_norm = norm
+            img *= norm
 
         np.nan_to_num(img, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
         np.clip(img, 0.0, 1.0, out=img)
@@ -11503,12 +11925,292 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._large_preview_dialog.raise_()
         self._large_preview_dialog.activateWindow()
 
+    # ------------------------------------------------------------------
+    # Interactive Color Sampling (Eyedropper from Plate or Screen)
+    # ------------------------------------------------------------------
+
+    def start_color_sampling(self, target_picker):
+        """Arm interactive eyedropper mode to sample color from Plate preview or anywhere on screen."""
+        if hasattr(self, '_active_color_sampler') and self._active_color_sampler and self._active_color_sampler != target_picker:
+            self._active_color_sampler.setPickActive(False)
+
+        self._active_color_sampler = target_picker
+        target_picker.setPickActive(True)
+
+        if not hasattr(self, '_color_sampler_filter') or self._color_sampler_filter is None:
+            self._color_sampler_filter = ColorSamplerEventFilter(self)
+
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.removeEventFilter(self._color_sampler_filter)
+            app.installEventFilter(self._color_sampler_filter)
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CrossCursor)
+
+        label_name = getattr(target_picker, '_label', 'Color')
+        self.log(f"🎯 Color Picker Armed: Click on Target Plate preview (or anywhere on screen) to sample {label_name}. Press [Esc] to cancel.", "INFO")
+
+    def stop_color_sampling(self):
+        """Disarm interactive eyedropper mode."""
+        if hasattr(self, '_active_color_sampler') and self._active_color_sampler:
+            self._active_color_sampler.setPickActive(False)
+            self._active_color_sampler = None
+
+        app = QtWidgets.QApplication.instance()
+        if app and hasattr(self, '_color_sampler_filter') and self._color_sampler_filter:
+            app.removeEventFilter(self._color_sampler_filter)
+
+        try:
+            while QtWidgets.QApplication.overrideCursor() is not None:
+                QtWidgets.QApplication.restoreOverrideCursor()
+        except Exception:
+            pass
+
+    def _show_color_sampling_hover(self, widget, global_pos):
+        """Show live hover preview tooltip during eyedropper sampling."""
+        if not getattr(self, '_active_color_sampler', None):
+            return
+        r, g, b, is_plate = self.sample_color_at(widget, global_pos)
+        max_c = max(r, g, b)
+        if max_c > 1e-5:
+            rn, gn, bn = r / max_c, g / max_c, b / max_c
+        else:
+            rn, gn, bn = 1.0, 1.0, 1.0
+        hex_code = f"#{int(np.clip(rn * 255, 0, 255)):02X}{int(np.clip(gn * 255, 0, 255)):02X}{int(np.clip(bn * 255, 0, 255)):02X}"
+        source_str = "Plate (Linear)" if is_plate else "Screen"
+        QtWidgets.QToolTip.showText(
+            global_pos,
+            f"🎯 {source_str}\nRGB: ({r:.3f}, {g:.3f}, {b:.3f})\nTint: {hex_code}",
+            widget or self
+        )
+
+    def _finish_color_sampling_at(self, widget, global_pos):
+        """Sample color under click and apply to active picker."""
+        picker = getattr(self, '_active_color_sampler', None)
+        if not picker:
+            self.stop_color_sampling()
+            return
+
+        r, g, b, is_plate = self.sample_color_at(widget, global_pos)
+        max_c = max(r, g, b)
+        if max_c > 1e-5:
+            r_norm, g_norm, b_norm = r / max_c, g / max_c, b / max_c
+        else:
+            r_norm, g_norm, b_norm = 1.0, 1.0, 1.0
+
+        label_name = getattr(picker, '_label', 'Color')
+        source_str = "Plate (32-bit float)" if is_plate else "Screen (linearized)"
+        self.log(
+            f"🎯 Sampled {label_name} from {source_str}: Raw=({r:.3f}, {g:.3f}, {b:.3f}) → Tint=({r_norm:.3f}, {g_norm:.3f}, {b_norm:.3f})",
+            "SUCCESS"
+        )
+        picker.setColor(r_norm, g_norm, b_norm)
+        self.stop_color_sampling()
+
+    def sample_color_at(self, widget, global_pos):
+        """
+        Samples color at given widget and global position.
+        Returns: (r, g, b, is_plate: bool)
+        """
+        plate_arr = getattr(self, '_plate_full_array', None)
+        if plate_arr is None:
+            plate_arr = getattr(self, '_plate_thumb_raw', None)
+
+        is_plate_widget = False
+        target_uv = None
+
+        if plate_arr is not None and widget is not None:
+            # 1. Side-by-side or Plate Only label
+            if widget in [getattr(self, 'lbl_plate_preview', None), getattr(self, 'lbl_single_plate', None)]:
+                pix = widget.pixmap()
+                if pix and not pix.isNull():
+                    pos = widget.mapFromGlobal(global_pos)
+                    w_lbl, h_lbl = widget.width(), widget.height()
+                    pw, ph = pix.width(), pix.height()
+                    ox = (w_lbl - pw) / 2.0
+                    oy = (h_lbl - ph) / 2.0
+                    rel_x = pos.x() - ox
+                    rel_y = pos.y() - oy
+                    if 0 <= rel_x <= pw and 0 <= rel_y <= ph:
+                        u = rel_x / max(1.0, pw)
+                        v = rel_y / max(1.0, ph)
+                        target_uv = (u, v)
+                        is_plate_widget = True
+
+            # 2. Split Wipe preview label (plate is on the right portion of the split)
+            elif widget == getattr(self, 'lbl_wipe_preview', None):
+                pix = widget.pixmap()
+                if pix and not pix.isNull():
+                    pos = widget.mapFromGlobal(global_pos)
+                    pw, ph = widget.width(), widget.height()
+                    u = np.clip(pos.x() / max(1.0, pw), 0.0, 1.0)
+                    v = np.clip(pos.y() / max(1.0, ph), 0.0, 1.0)
+                    target_uv = (u, v)
+                    is_plate_widget = True
+
+            # 3. Popout Inspector image label
+            elif hasattr(self, '_large_preview_dialog') and self._large_preview_dialog:
+                dlg = self._large_preview_dialog
+                if widget == getattr(dlg, 'lbl_image', None) and getattr(dlg, 'current_mode', '') in ['plate', 'wipe']:
+                    pix = widget.pixmap()
+                    if pix and not pix.isNull():
+                        pos = widget.mapFromGlobal(global_pos)
+                        w_lbl, h_lbl = widget.width(), widget.height()
+                        pw, ph = pix.width(), pix.height()
+                        ox = (w_lbl - pw) / 2.0
+                        oy = (h_lbl - ph) / 2.0
+                        rel_x = pos.x() - ox
+                        rel_y = pos.y() - oy
+                        if 0 <= rel_x <= pw and 0 <= rel_y <= ph:
+                            u = rel_x / max(1.0, pw)
+                            v = rel_y / max(1.0, ph)
+                            target_uv = (u, v)
+                            is_plate_widget = True
+
+        # If identified on plate preview, sample from linear float32 array with 3x3 box filter
+        if is_plate_widget and target_uv is not None and plate_arr is not None:
+            u, v = target_uv
+            H, W = plate_arr.shape[:2]
+            cx = int(np.clip(u * (W - 1), 0, W - 1))
+            cy = int(np.clip(v * (H - 1), 0, H - 1))
+            y0, y1 = max(0, cy - 1), min(H, cy + 2)
+            x0, x1 = max(0, cx - 1), min(W, cx + 2)
+            patch = plate_arr[y0:y1, x0:x1, :3]
+            rgb = np.mean(patch, axis=(0, 1))
+            return float(rgb[0]), float(rgb[1]), float(rgb[2]), True
+
+        # Fallback: Screen pixel grab (linearized from sRGB display)
+        try:
+            screen = QtGui.QGuiApplication.screenAt(global_pos) or QtGui.QGuiApplication.primaryScreen()
+            if screen:
+                pix = screen.grabWindow(0, global_pos.x(), global_pos.y(), 1, 1)
+                col = pix.toImage().pixelColor(0, 0)
+                def _s2l(c):
+                    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+                return _s2l(col.redF()), _s2l(col.greenF()), _s2l(col.blueF()), False
+        except Exception as e:
+            print(f"[DomeBreaker] Color sample screen grab error: {e}")
+
+        return 1.0, 1.0, 1.0, False
+
+    def sample_average_plate_sky(self):
+        """Sample top 40% average linear color from plate and apply to Sky Color."""
+        plate_arr = getattr(self, '_plate_full_array', None) or getattr(self, '_plate_thumb_raw', None)
+        if plate_arr is None:
+            self.log("No Target Plate loaded to sample average sky.", "WARNING")
+            return
+        H, W = plate_arr.shape[:2]
+        sky_patch = plate_arr[:max(1, int(H * 0.4)), :, :3]
+        mean_rgb = np.mean(sky_patch, axis=(0, 1))
+        r, g, b = float(mean_rgb[0]), float(mean_rgb[1]), float(mean_rgb[2])
+        max_c = max(r, g, b)
+        if max_c > 1e-5:
+            r, g, b = r / max_c, g / max_c, b / max_c
+        if hasattr(self, 'col_sky'):
+            self.col_sky.setColor(r, g, b)
+            self.log(f"🌅 Set Sky Color to Plate Average Sky (Top 40%): Tint=({r:.3f}, {g:.3f}, {b:.3f})", "SUCCESS")
+
+    def sample_average_plate_ground(self):
+        """Sample bottom 40% average linear color from plate and apply to Ground Color."""
+        plate_arr = getattr(self, '_plate_full_array', None) or getattr(self, '_plate_thumb_raw', None)
+        if plate_arr is None:
+            self.log("No Target Plate loaded to sample average ground.", "WARNING")
+            return
+        H, W = plate_arr.shape[:2]
+        ground_patch = plate_arr[int(H * 0.6):, :, :3]
+        mean_rgb = np.mean(ground_patch, axis=(0, 1))
+        r, g, b = float(mean_rgb[0]), float(mean_rgb[1]), float(mean_rgb[2])
+        max_c = max(r, g, b)
+        if max_c > 1e-5:
+            r, g, b = r / max_c, g / max_c, b / max_c
+        if hasattr(self, 'col_ground'):
+            self.col_ground.setColor(r, g, b)
+            self.log(f"🌄 Set Ground Color to Plate Average Ground (Bottom 40%): Tint=({r:.3f}, {g:.3f}, {b:.3f})", "SUCCESS")
+
+    def _show_preview_context_menu(self, widget, global_pos):
+        """Show context menu on plate previews for quick color sampling."""
+        if widget not in [getattr(self, 'lbl_plate_preview', None), getattr(self, 'lbl_single_plate', None)]:
+            return False
+
+        menu = QtWidgets.QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background-color: #202226; color: #eee; border: 1px solid #3c4048; padding: 4px; border-radius: 4px; } "
+            "QMenu::item { padding: 4px 20px; font-size: 11px; } "
+            "QMenu::item:selected { background-color: #e67e22; color: #fff; border-radius: 2px; } "
+            "QMenu::separator { height: 1px; background-color: #333; margin: 4px 6px; }"
+        )
+
+        act_sky = menu.addAction("🎯 Sample Click as Sky Color")
+        act_ground = menu.addAction("🎯 Sample Click as Ground Color")
+        menu.addSeparator()
+        act_avg_sky = menu.addAction("🌅 Set Sky Color to Plate Average Sky (Top 40%)")
+        act_avg_ground = menu.addAction("🌄 Set Ground Color to Plate Average Ground (Bottom 40%)")
+
+        chosen = menu.exec_(global_pos)
+        if not chosen:
+            return True
+
+        if chosen == act_sky:
+            if hasattr(self, 'col_sky'):
+                self.start_color_sampling(self.col_sky)
+        elif chosen == act_ground:
+            if hasattr(self, 'col_ground'):
+                self.start_color_sampling(self.col_ground)
+        elif chosen == act_avg_sky:
+            self.sample_average_plate_sky()
+        elif chosen == act_avg_ground:
+            self.sample_average_plate_ground()
+
+        return True
+
+    def _draw_sun_reticle(self, pixmap):
+        """Draw interactive amber dashed circle and crosshair at current Sun Target UV position."""
+        if not pixmap or pixmap.isNull():
+            return
+        try:
+            painter = QtGui.QPainter(pixmap)
+            painter.setRenderHint(QtGui.QPainter.Antialiasing)
+            pw = pixmap.width()
+            ph = pixmap.height()
+            sun_u = float(self.sld_sun_u.value()) if hasattr(self, 'sld_sun_u') else 0.5
+            sun_v = float(self.sld_sun_v.value()) if hasattr(self, 'sld_sun_v') else 0.25
+            sun_r = float(self.sld_sun_radius.value()) if hasattr(self, 'sld_sun_radius') else 0.03
+            yaw = float(self.sld_yaw.value()) if hasattr(self, 'sld_yaw') else 0.0
+
+            # Horizontal yaw roll in equirectangular projection
+            disp_u = (sun_u + (yaw % 360.0) / 360.0) % 1.0
+            cx = disp_u * pw
+            cy = sun_v * ph
+            rx_px = max(4.0, sun_r * pw)
+            ry_px = max(4.0, sun_r * ph)
+
+            # Outer sun disk radius (gold dashed circle)
+            pen_disk = QtGui.QPen(QtGui.QColor(255, 170, 0, 220), 1.5, QtCore.Qt.DashLine)
+            painter.setPen(pen_disk)
+            painter.setBrush(QtCore.Qt.NoBrush)
+            painter.drawEllipse(QtCore.QPointF(cx, cy), rx_px, ry_px)
+
+            # Precision crosshair
+            pen_cross = QtGui.QPen(QtGui.QColor(255, 255, 255, 240), 1.2)
+            painter.setPen(pen_cross)
+            ch_len = max(6.0, min(14.0, rx_px * 0.7))
+            painter.drawLine(QtCore.QPointF(cx - ch_len, cy), QtCore.QPointF(cx + ch_len, cy))
+            painter.drawLine(QtCore.QPointF(cx, cy - ch_len), QtCore.QPointF(cx, cy + ch_len))
+            painter.drawPoint(QtCore.QPointF(cx, cy))
+
+            painter.end()
+        except Exception:
+            pass
+
     def _update_all_previews(self, *args):
         hdri_u8 = self._tonemap_array(self._hdri_thumb_raw, apply_calib=True)
         plate_u8 = self._tonemap_array(self._plate_thumb_raw, apply_calib=False)
 
         pix_h = self._arr_to_pixmap(hdri_u8)
         pix_p = self._arr_to_pixmap(plate_u8)
+
+        # Draw interactive Sun Target reticle if Sun Relighting is enabled
+        if hasattr(self, 'grp_sun') and self.grp_sun.isChecked() and pix_h:
+            self._draw_sun_reticle(pix_h)
 
         # 1. Update Side-by-Side previews
         if pix_h:
@@ -11593,8 +12295,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "horizon_h": self.sld_horizon_height.value(),
             "horizon_f": self.sld_horizon_feather.value(),
             "sky_ev": self.sld_sky_ev.value(),
+            "sky_sat": self.sld_sky_sat.value() if hasattr(self, 'sld_sky_sat') else 1.0,
             "sky_color": list(self.col_sky.color()) if hasattr(self, 'col_sky') else [1.0, 1.0, 1.0],
             "ground_ev": self.sld_ground_ev.value(),
+            "ground_sat": self.sld_ground_sat.value() if hasattr(self, 'sld_ground_sat') else 1.0,
             "ground_color": list(self.col_ground.color()) if hasattr(self, 'col_ground') else [1.0, 1.0, 1.0],
             "softclip_en": self.grp_softclip.isChecked(),
             "softclip_t": self.sld_softclip_thresh.value(),
@@ -13099,6 +13803,14 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
     def _on_sun_reconstruct_changed(self):
         """Update sun intensity and angular diameter based on reconstruction settings."""
         clip_info = getattr(self, '_last_sun_clip_info', None)
+        if clip_info is None:
+            if getattr(self, '_hdri_thumb_raw', None) is not None or getattr(self, '_hdri_full_array', None) is not None or (hasattr(self, 'txt_hdri') and self.txt_hdri.text().strip()):
+                try:
+                    self._extract_and_apply_sun_values()
+                    clip_info = getattr(self, '_last_sun_clip_info', None)
+                except Exception:
+                    pass
+
         turbidity = float(self.sld_sun_turbidity.value()) if hasattr(self, 'sld_sun_turbidity') else 3.0
         reconstruct_en = self.chk_sun_reconstruct.isChecked() if hasattr(self, 'chk_sun_reconstruct') else False
         blend = (float(self.sld_sun_reconstruct_blend.value()) / 100.0) if hasattr(self, 'sld_sun_reconstruct_blend') else 1.0
@@ -13139,6 +13851,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 if hasattr(self, 'sld_sun_angle'):
                     self.sld_sun_angle.setValue(0.53)
         self._sync_node()
+        self._update_all_previews()
 
     def _apply_light_groups_to_stage(self, *args, notify_ui=True, **kwargs):
         """Enable and apply AOV Light Groups / LPE Tags directly on all physical stage lights for Karma, Arnold, and Redshift."""
@@ -13357,7 +14070,9 @@ def _gen_calibrate_code(p):
         'pipeline.state.horizon_height = {0}'.format(p["horizon_h"]),
         'pipeline.state.horizon_feather = {0}'.format(p["horizon_f"]),
         'pipeline.state.sky_ev_offset = {0}'.format(p["sky_ev"]),
+        'pipeline.state.sky_desat = {0}'.format(max(0.0, 1.0 - p.get("sky_sat", 1.0))),
         'pipeline.state.ground_ev_offset = {0}'.format(p["ground_ev"]),
+        'pipeline.state.ground_desat = {0}'.format(max(0.0, 1.0 - p.get("ground_sat", 1.0))),
         'pipeline.state.softclip_enable = {0}'.format(p["softclip_en"]),
         'pipeline.state.softclip_threshold = {0}'.format(p["softclip_t"]),
         'pipeline.state.softclip_rolloff = {0}'.format(p["softclip_r"]),

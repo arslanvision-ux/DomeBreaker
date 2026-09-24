@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <pythonPanelDocument>
   <interface name="domebreaker_panel" label="DomeBreaker"
-             icon="LOP_light" help_url="">
+             icon="domebreaker_logo_48.png" help_url="">
     <script><![CDATA[
 def _build_panel():
     try:

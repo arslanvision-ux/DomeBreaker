@@ -1,13 +1,15 @@
-# ⚡ DomeBreaker
+<div align="center">
+  <img src="screenshots/domebreaker_logo.png" alt="DomeBreaker Logo" width="200px">
+  <h1>⚡ DomeBreaker</h1>
+  <p><strong>Production-Grade Solaris USD Lighting, Interior Room Projection & Lookdev Suite for SideFX Houdini</strong></p>
 
-**Production-Grade Solaris USD Lighting, Interior Room Projection & Lookdev Suite for SideFX Houdini**
-
-[![Houdini](https://img.shields.io/badge/Houdini-20.0%20|%2020.5%20|%2021.0-orange.svg)](https://www.sidefx.com/)
-[![USD](https://img.shields.io/badge/OpenUSD-22.11+-blue.svg)](https://openusd.org/)
-[![Renderers](https://img.shields.io/badge/Renderers-Karma%20|%20Arnold%20|%20Redshift-9cf.svg)](#universal-multi-renderer-shader-pipeline)
-[![Release](https://img.shields.io/badge/Release-v1.0.0--beta.1-purple.svg)](https://github.com/arslanvision-ux/DomeBreaker/releases)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20|%20Linux-lightgrey.svg)](#-quick-installation)
+  [![Houdini](https://img.shields.io/badge/Houdini-20.0%20|%2020.5%20|%2021.0-orange.svg)](https://www.sidefx.com/)
+  [![USD](https://img.shields.io/badge/OpenUSD-22.11+-blue.svg)](https://openusd.org/)
+  [![Renderers](https://img.shields.io/badge/Renderers-Karma%20|%20Arnold%20|%20Redshift-9cf.svg)](#universal-multi-renderer-shader-pipeline)
+  [![Release](https://img.shields.io/badge/Release-v2.0.0-purple.svg)](https://github.com/arslanvision-ux/DomeBreaker/releases)
+  [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+  [![Platform](https://img.shields.io/badge/Platform-Windows%20|%20Linux-lightgrey.svg)](#-quick-installation)
+</div>
 
 <div align="center">
   <img src="screenshots/Small_Room4.jpg" alt="DomeBreaker Main Presentation - Interactive Lookdev & Room Dimension Analyzer" width="100%">

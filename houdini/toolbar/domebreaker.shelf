@@ -11,7 +11,7 @@
     <memberTool name="splatforge_open_panel"/>
   </toolshelf>
 
-  <tool name="domebreaker_open_panel" label="DomeBreaker" icon="LOP_light">
+  <tool name="domebreaker_open_panel" label="DomeBreaker" icon="domebreaker_logo_48.png">
     <helpText><![CDATA[
 Open the DomeBreaker UI Panel in a single clean floating window or bring existing panel to front.
 ]]></helpText>
