@@ -27,6 +27,11 @@ try:
 except ImportError:
     hou = None
 
+try:
+    from pxr import Usd, UsdGeom, Sdf, Vt, Gf
+except ImportError:
+    Usd = UsdGeom = Sdf = Vt = Gf = None
+
 
 def cluster_interior_splats(
     pts,
@@ -164,6 +169,99 @@ def cluster_interior_splats(
     return clusters
 
 
+def _save_mesh_as_usd(
+    output_path,
+    positions,
+    face_vertex_counts,
+    face_vertex_indices,
+    normals=None,
+    colors=None,
+    uvs=None,
+    prim_name="prop_mesh",
+):
+    """
+    Save polygonal mesh data as a valid .usdc USD file using the pxr API.
+
+    This bypasses hou.Geometry.saveToFile() which may not produce valid USD
+    that can be loaded via Usd.References().AddReference().
+
+    Args:
+        output_path: Absolute path to .usdc/.usd file.
+        positions: list of (x, y, z) tuples or Gf.Vec3f.
+        face_vertex_counts: list of int (vertices per face).
+        face_vertex_indices: list of int (vertex indices).
+        normals: Optional list of (nx, ny, nz) per point.
+        colors: Optional list of (r, g, b) per point.
+        uvs: Optional list of (u, v) per point.
+        prim_name: USD prim name for the mesh.
+
+    Returns:
+        output_path if successful, or None.
+    """
+    if not Usd or not UsdGeom:
+        return None
+
+    try:
+        stage = Usd.Stage.CreateNew(output_path)
+        stage.SetMetadata("upAxis", "Y")
+        stage.SetMetadata("metersPerUnit", 1.0)
+
+        mesh_path = f"/{prim_name}"
+        mesh = UsdGeom.Mesh.Define(stage, mesh_path)
+        stage.SetDefaultPrim(mesh.GetPrim())
+
+        # Positions
+        pts_vt = Vt.Vec3fArray(len(positions))
+        for i, p in enumerate(positions):
+            pts_vt[i] = Gf.Vec3f(float(p[0]), float(p[1]), float(p[2]))
+        mesh.GetPointsAttr().Set(pts_vt)
+
+        # Face topology
+        mesh.GetFaceVertexCountsAttr().Set(Vt.IntArray(face_vertex_counts))
+        mesh.GetFaceVertexIndicesAttr().Set(Vt.IntArray(face_vertex_indices))
+
+        # Normals (per-point, vertex interpolation)
+        if normals and len(normals) == len(positions):
+            nrm_vt = Vt.Vec3fArray(len(normals))
+            for i, n in enumerate(normals):
+                nrm_vt[i] = Gf.Vec3f(float(n[0]), float(n[1]), float(n[2]))
+            mesh.GetNormalsAttr().Set(nrm_vt)
+            mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+
+        # Vertex colors (displayColor primvar, vertex interpolation)
+        if colors and len(colors) == len(positions):
+            cd_pv = UsdGeom.PrimvarsAPI(mesh.GetPrim()).CreatePrimvar(
+                "displayColor", Sdf.ValueTypeNames.Color3fArray, UsdGeom.Tokens.vertex
+            )
+            cd_vt = Vt.Vec3fArray(len(colors))
+            for i, c in enumerate(colors):
+                cd_vt[i] = Gf.Vec3f(
+                    float(max(0.0, min(1.0, c[0]))),
+                    float(max(0.0, min(1.0, c[1]))),
+                    float(max(0.0, min(1.0, c[2]))),
+                )
+            cd_pv.Set(cd_vt)
+
+        # UVs (st primvar, vertex interpolation)
+        if uvs and len(uvs) == len(positions):
+            uv_pv = UsdGeom.PrimvarsAPI(mesh.GetPrim()).CreatePrimvar(
+                "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex
+            )
+            uv_vt = Vt.Vec2fArray(len(uvs))
+            for i, uv in enumerate(uvs):
+                uv_vt[i] = Gf.Vec2f(float(uv[0]), float(uv[1]))
+            uv_pv.Set(uv_vt)
+
+        # Subdivision scheme: none (render as polygons)
+        mesh.GetSubdivisionSchemeAttr().Set("none")
+
+        stage.Save()
+        return output_path
+    except Exception as e:
+        print(f"[HDRI Match] Failed to save USD mesh to {output_path}: {e}")
+        return None
+
+
 def reconstruct_heightfield_prop(
     points,
     floor_y=0.0,
@@ -243,19 +341,16 @@ def reconstruct_heightfield_prop(
         avg_col = np.mean(colors, axis=0).astype(np.float32)
     color_grid[~valid_cw] = avg_col
 
-    # 2. Build polygonal geometry
-    if not hou:
-        return None
+    # 2. Build polygonal mesh arrays for USD export
+    # Each grid cell (i, j) produces a top point and a base (floor) point
+    # Point index layout: top points = i*nz + j, base points = nx*nz + i*nz + j
+    n_top_pts = nx * nz
+    positions = []
+    normals_arr = []
+    colors_arr = []
+    uvs_arr = []
 
-    geo = hou.Geometry()
-    n_attrib = geo.addAttrib(hou.attribType.Point, "N", hou.Vector3(0.0, 1.0, 0.0))
-    cd_attrib = geo.addAttrib(hou.attribType.Point, "Cd", hou.Vector3(0.65, 0.65, 0.65))
-    uv_attrib = geo.addAttrib(hou.attribType.Point, "uv", hou.Vector3(0.0, 0.0, 0.0))
-
-    # Create top surface points with smooth analytic normals
-    pt_top = {}
-    pt_base = {}
-
+    # Top surface points with smooth analytic normals
     for i in range(nx):
         x_val = float(min_x + i * grid_res)
         u_val = float(i) / max(1, nx - 1)
@@ -264,90 +359,113 @@ def reconstruct_heightfield_prop(
             v_val = float(j) / max(1, nz - 1)
             y_val = float(height_grid[i, j])
 
-            # Analytic normal at (i, j)
+            # Analytic normal via central differences
             dx = (height_grid[min(nx - 1, i + 1), j] - height_grid[max(0, i - 1), j]) / (2.0 * grid_res)
             dz = (height_grid[i, min(nz - 1, j + 1)] - height_grid[i, max(0, j - 1)]) / (2.0 * grid_res)
-            n_top = hou.Vector3(-float(dx), 1.0, -float(dz)).normalized()
+            n_vec = np.array([-float(dx), 1.0, -float(dz)], dtype=np.float32)
+            n_len = np.linalg.norm(n_vec)
+            if n_len > 1e-8:
+                n_vec /= n_len
 
             c_rgb = color_grid[i, j]
-            col_v = hou.Vector3(float(np.clip(c_rgb[0], 0.0, 1.0)),
-                                float(np.clip(c_rgb[1], 0.0, 1.0)),
-                                float(np.clip(c_rgb[2], 0.0, 1.0)))
+            positions.append((x_val, y_val, z_val))
+            normals_arr.append((float(n_vec[0]), float(n_vec[1]), float(n_vec[2])))
+            colors_arr.append((float(np.clip(c_rgb[0], 0.0, 1.0)),
+                               float(np.clip(c_rgb[1], 0.0, 1.0)),
+                               float(np.clip(c_rgb[2], 0.0, 1.0))))
+            uvs_arr.append((u_val, v_val))
 
-            p_t = geo.createPoint()
-            p_t.setPosition(hou.Vector3(x_val, y_val, z_val))
-            p_t.setAttribValue(n_attrib, n_top)
-            p_t.setAttribValue(cd_attrib, col_v)
-            p_t.setAttribValue(uv_attrib, hou.Vector3(u_val, v_val, 0.0))
-            pt_top[(i, j)] = p_t
+    # Base (floor) points
+    for i in range(nx):
+        x_val = float(min_x + i * grid_res)
+        u_val = float(i) / max(1, nx - 1)
+        for j in range(nz):
+            z_val = float(min_z + j * grid_res)
+            v_val = float(j) / max(1, nz - 1)
+            positions.append((x_val, base_y, z_val))
+            normals_arr.append((0.0, -1.0, 0.0))
+            colors_arr.append((float(avg_col[0] * 0.7), float(avg_col[1] * 0.7), float(avg_col[2] * 0.7)))
+            uvs_arr.append((u_val, v_val))
 
-            p_b = geo.createPoint()
-            p_b.setPosition(hou.Vector3(x_val, base_y, z_val))
-            p_b.setAttribValue(n_attrib, hou.Vector3(0.0, -1.0, 0.0))
-            p_b.setAttribValue(cd_attrib, hou.Vector3(float(avg_col[0] * 0.7), float(avg_col[1] * 0.7), float(avg_col[2] * 0.7)))
-            p_b.setAttribValue(uv_attrib, hou.Vector3(u_val, v_val, 0.0))
-            pt_base[(i, j)] = p_b
+    def _top_idx(i, j):
+        return i * nz + j
+
+    def _base_idx(i, j):
+        return n_top_pts + i * nz + j
+
+    face_vertex_counts = []
+    face_vertex_indices = []
 
     # A. Top quads
     for i in range(nx - 1):
         for j in range(nz - 1):
-            poly = geo.createPolygon()
-            poly.addVertex(pt_top[(i, j)])
-            poly.addVertex(pt_top[(i+1, j)])
-            poly.addVertex(pt_top[(i+1, j+1)])
-            poly.addVertex(pt_top[(i, j+1)])
+            face_vertex_counts.append(4)
+            face_vertex_indices.extend([
+                _top_idx(i, j), _top_idx(i+1, j), _top_idx(i+1, j+1), _top_idx(i, j+1)
+            ])
 
     # B. Bottom base quads (reversed winding for outward normals)
     for i in range(nx - 1):
         for j in range(nz - 1):
-            poly = geo.createPolygon()
-            poly.addVertex(pt_base[(i, j+1)])
-            poly.addVertex(pt_base[(i+1, j+1)])
-            poly.addVertex(pt_base[(i+1, j)])
-            poly.addVertex(pt_base[(i, j)])
+            face_vertex_counts.append(4)
+            face_vertex_indices.extend([
+                _base_idx(i, j+1), _base_idx(i+1, j+1), _base_idx(i+1, j), _base_idx(i, j)
+            ])
 
     # C. Side skirt walls
     # South edge (j = 0)
     for i in range(nx - 1):
-        poly = geo.createPolygon()
-        poly.addVertex(pt_top[(i, 0)])
-        poly.addVertex(pt_base[(i, 0)])
-        poly.addVertex(pt_base[(i+1, 0)])
-        poly.addVertex(pt_top[(i+1, 0)])
+        face_vertex_counts.append(4)
+        face_vertex_indices.extend([
+            _top_idx(i, 0), _base_idx(i, 0), _base_idx(i+1, 0), _top_idx(i+1, 0)
+        ])
 
     # North edge (j = nz - 1)
     for i in range(nx - 1):
-        poly = geo.createPolygon()
-        poly.addVertex(pt_top[(i+1, nz-1)])
-        poly.addVertex(pt_base[(i+1, nz-1)])
-        poly.addVertex(pt_base[(i, nz-1)])
-        poly.addVertex(pt_top[(i, nz-1)])
+        face_vertex_counts.append(4)
+        face_vertex_indices.extend([
+            _top_idx(i+1, nz-1), _base_idx(i+1, nz-1), _base_idx(i, nz-1), _top_idx(i, nz-1)
+        ])
 
     # West edge (i = 0)
     for j in range(nz - 1):
-        poly = geo.createPolygon()
-        poly.addVertex(pt_top[(0, j+1)])
-        poly.addVertex(pt_base[(0, j+1)])
-        poly.addVertex(pt_base[(0, j)])
-        poly.addVertex(pt_top[(0, j)])
+        face_vertex_counts.append(4)
+        face_vertex_indices.extend([
+            _top_idx(0, j+1), _base_idx(0, j+1), _base_idx(0, j), _top_idx(0, j)
+        ])
 
     # East edge (i = nx - 1)
     for j in range(nz - 1):
-        poly = geo.createPolygon()
-        poly.addVertex(pt_top[(nx-1, j)])
-        poly.addVertex(pt_base[(nx-1, j)])
-        poly.addVertex(pt_base[(nx-1, j+1)])
-        poly.addVertex(pt_top[(nx-1, j+1)])
+        face_vertex_counts.append(4)
+        face_vertex_indices.extend([
+            _top_idx(nx-1, j), _base_idx(nx-1, j), _base_idx(nx-1, j+1), _top_idx(nx-1, j+1)
+        ])
 
     # Determine default output path
     if not output_path:
         out_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/props"
-        output_path = os.path.join(out_dir, "prop_heightfield.bgeo.sc").replace("\\", "/")
+        output_path = os.path.join(out_dir, "prop_heightfield.usdc").replace("\\", "/")
 
+    # Ensure .usdc extension for USD compatibility (Solaris references require USD format)
     norm_path = os.path.abspath(output_path).replace("\\", "/")
+    if norm_path.endswith(".bgeo.sc") or norm_path.endswith(".bgeo"):
+        norm_path = norm_path.rsplit(".bgeo", 1)[0] + ".usdc"
+    elif not norm_path.endswith((".usd", ".usda", ".usdc")):
+        norm_path = os.path.splitext(norm_path)[0] + ".usdc"
     os.makedirs(os.path.dirname(norm_path), exist_ok=True)
-    geo.saveToFile(norm_path)
-    return norm_path
+
+    # Export as valid USD via pxr API
+    result = _save_mesh_as_usd(
+        output_path=norm_path,
+        positions=positions,
+        face_vertex_counts=face_vertex_counts,
+        face_vertex_indices=face_vertex_indices,
+        normals=normals_arr,
+        colors=colors_arr,
+        uvs=uvs_arr,
+        prim_name="prop_mesh",
+    )
+    return result
 
 
 def reconstruct_vdb_prop(
@@ -382,9 +500,14 @@ def reconstruct_vdb_prop(
     # Determine default output path
     if not output_path:
         out_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/props"
-        output_path = os.path.join(out_dir, "prop_vdb.bgeo.sc").replace("\\", "/")
+        output_path = os.path.join(out_dir, "prop_vdb.usdc").replace("\\", "/")
 
+    # Ensure .usdc extension for USD compatibility (Solaris references require USD format)
     norm_path = os.path.abspath(output_path).replace("\\", "/")
+    if norm_path.endswith(".bgeo.sc") or norm_path.endswith(".bgeo"):
+        norm_path = norm_path.rsplit(".bgeo", 1)[0] + ".usdc"
+    elif not norm_path.endswith((".usd", ".usda", ".usdc")):
+        norm_path = os.path.splitext(norm_path)[0] + ".usdc"
     os.makedirs(os.path.dirname(norm_path), exist_ok=True)
 
     # 1. Create temporary particle geometry
@@ -402,7 +525,7 @@ def reconstruct_vdb_prop(
             p.setAttribValue(cd_att, hou.Vector3(float(c[0]), float(c[1]), float(c[2])))
 
     temp_pts_file = os.path.join(os.path.dirname(norm_path), "_temp_splat_pts.bgeo.sc").replace("\\", "/")
-    pt_geo.saveToFile(temp_pts_file)
+    pt_geo.saveToFile(temp_pts_file)  # Temp particles stay as .bgeo.sc (only internal use)
 
     # 2. Build temporary headless SOP network
     obj = hou.node("/obj")
@@ -446,12 +569,60 @@ def reconstruct_vdb_prop(
             transfer_sop.parm("thresholddist").set(float(voxel_size * 2.5))
             last_node = transfer_sop
 
+        # Save SOP mesh to temporary .bgeo.sc (native SOP format), then convert to USD
+        temp_mesh_file = os.path.join(os.path.dirname(norm_path), "_temp_vdb_mesh.bgeo.sc").replace("\\", "/")
         out_sop = sop_net.createNode("rop_geometry", "save_vdb_mesh")
         out_sop.setInput(0, last_node)
-        out_sop.parm("sopoutput").set(norm_path)
+        out_sop.parm("sopoutput").set(temp_mesh_file)
         out_sop.parm("execute").pressButton()
 
-        return norm_path
+        # Read back the cooked mesh and convert to USD
+        if os.path.isfile(temp_mesh_file):
+            mesh_geo = hou.Geometry()
+            mesh_geo.loadFromFile(temp_mesh_file)
+
+            positions = []
+            normals_list = []
+            colors_list = []
+            has_N = mesh_geo.findPointAttrib("N") is not None
+            has_Cd = mesh_geo.findPointAttrib("Cd") is not None
+
+            for pt in mesh_geo.points():
+                pos = pt.position()
+                positions.append((float(pos[0]), float(pos[1]), float(pos[2])))
+                if has_N:
+                    n = pt.attribValue("N")
+                    normals_list.append((float(n[0]), float(n[1]), float(n[2])))
+                if has_Cd:
+                    c = pt.attribValue("Cd")
+                    colors_list.append((float(c[0]), float(c[1]), float(c[2])))
+
+            face_vertex_counts = []
+            face_vertex_indices = []
+            for prim in mesh_geo.prims():
+                verts = prim.vertices()
+                face_vertex_counts.append(len(verts))
+                for v in verts:
+                    face_vertex_indices.append(v.point().number())
+
+            result = _save_mesh_as_usd(
+                output_path=norm_path,
+                positions=positions,
+                face_vertex_counts=face_vertex_counts,
+                face_vertex_indices=face_vertex_indices,
+                normals=normals_list if has_N else None,
+                colors=colors_list if has_Cd else None,
+                prim_name="prop_mesh",
+            )
+
+            # Cleanup temp mesh
+            try:
+                os.remove(temp_mesh_file)
+            except OSError:
+                pass
+
+            return result
+        return None
     finally:
         sop_net.destroy()
         if os.path.exists(temp_pts_file):
@@ -470,7 +641,7 @@ def reconstruct_prop_cluster(
 ):
     """
     High-level dispatcher for reconstructing a detected interior prop cluster
-    into a clean 3D polygonal geometry mesh (.bgeo.sc) for Houdini Solaris.
+    into a clean 3D polygonal geometry mesh (.usdc) for Houdini Solaris.
 
     Args:
         prop: Prop dictionary containing 'name', 'points', 'colors', etc.
@@ -480,7 +651,7 @@ def reconstruct_prop_cluster(
         output_dir: Destination directory for saved meshes (defaults to scenes/props).
 
     Returns:
-        Absolute filepath to the saved .bgeo.sc mesh, or None.
+        Absolute filepath to the saved .usdc mesh, or None.
     """
     pts = prop.get("points")
     if pts is None or len(pts) == 0:
@@ -507,7 +678,7 @@ def reconstruct_prop_cluster(
     else:
         actual_method = "vdb"
 
-    out_file = os.path.join(output_dir, f"{p_name}_{actual_method}.bgeo.sc").replace("\\", "/")
+    out_file = os.path.join(output_dir, f"{p_name}_{actual_method}.usdc").replace("\\", "/")
     cols = prop.get("colors")
 
     if actual_method == "heightfield":

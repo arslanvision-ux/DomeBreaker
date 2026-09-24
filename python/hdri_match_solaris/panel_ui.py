@@ -4143,7 +4143,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 if c_name in existing_names:
                     c_name = f"{c_name}_{c['id']}"
 
-                out_mesh_file = os.path.join(out_dir, f"{c_name}.bgeo.sc").replace("\\", "/")
+                out_mesh_file = os.path.join(out_dir, f"{c_name}.usdc").replace("\\", "/")
 
                 # Reconstruct
                 if method == "heightfield":
