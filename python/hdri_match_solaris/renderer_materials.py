@@ -454,7 +454,8 @@ def gen_create_material_function():
         '    is_all_renderers = ("all" in target) or (target == "all")',
         '    if is_all_renderers:',
         '        target = "all"',
-        '        roughness_val = 1.0',
+        '        if roughness_val is None:',
+        '            roughness_val = 0.85',
         '    build_arnold = target in ("all", "arnold")',
         '    build_karma = target in ("all", "karma")',
         '    build_redshift = target in ("all", "redshift")',
@@ -513,7 +514,7 @@ def gen_create_material_function():
         '        _km_shader = UsdShade.Shader.Define(stage, mat_path.AppendChild("KarmaMtlX"))',
         '        _km_shader.CreateIdAttr("ND_standard_surface_surfaceshader")',
         '        _km_out = _km_shader.CreateOutput("out", Sdf.ValueTypeNames.Token)',
-        '        _km_spec_roughness = 1.0 if is_all_renderers else float(roughness_val)',
+        '        _km_spec_roughness = float(roughness_val)',
         '        if mat_mode_val == "emissive":',
         '            _km_shader.CreateInput("base", Sdf.ValueTypeNames.Float).Set(0.0)',
         '            _km_shader.CreateInput("specular", Sdf.ValueTypeNames.Float).Set(0.0)',
@@ -732,7 +733,7 @@ def gen_create_material_function():
     return lines
 
 
-def create_or_update_material_library(stage_node, p):
+def create_or_update_material_library(stage_node, p, mat_lib_node_name=None):
     """Create or update a native Houdini Solaris Material Library LOP node in /stage.
 
     Instantiates interactive VOP shader networks inside the Material Library node and assigns
@@ -745,6 +746,7 @@ def create_or_update_material_library(stage_node, p):
     Args:
         stage_node: The parent /stage network in Houdini (hou.Node).
         p: Dictionary of parameters collected from the panel or settings.
+        mat_lib_node_name: Optional custom node name (defaults to p['mat_lib_node_name'] or 'hdri_match_materials').
 
     Returns:
         The created or updated materiallibrary hou.Node.
@@ -757,10 +759,13 @@ def create_or_update_material_library(stage_node, p):
     except ImportError:
         return None
 
-    mat_lib = stage_node.node("hdri_match_materials")
+    if mat_lib_node_name is None:
+        mat_lib_node_name = p.get("mat_lib_node_name", "hdri_match_materials") if isinstance(p, dict) else "hdri_match_materials"
+
+    mat_lib = stage_node.node(mat_lib_node_name)
     is_new = False
     if mat_lib is None:
-        mat_lib = stage_node.createNode("materiallibrary", "hdri_match_materials")
+        mat_lib = stage_node.createNode("materiallibrary", mat_lib_node_name)
         mat_lib.setColor(hou.Color((0.2, 0.6, 0.85)))
         is_new = True
 
@@ -830,22 +835,52 @@ def create_or_update_material_library(stage_node, p):
     planar_textures = p.get("planar_textures", {})
     hdri_tex = p.get("hdri_texture", "")
 
-    # Define surface map specs
+    # Determine target scene prefix: splatforge (/stage/room) vs domebreaker (/environment/ground_dome)
+    mat_lib_name = str(p.get("mat_lib_node_name", mat_lib.name() if hasattr(mat_lib, "name") else "hdri_materials")).lower()
+    is_splatforge = "splat" in mat_lib_name or "splat" in str(proj_mode).lower()
+
+    # Query editable stage if available to confirm exact primitive paths
+    stg = None
+    try:
+        stg = mat_lib.stage()
+    except Exception:
+        pass
+
+    def _resolve_geopath(candidates):
+        if stg:
+            for cand in candidates:
+                # Remove wildcard for validity check
+                check_path = cand[:-2] if cand.endswith("/*") else cand
+                prim = stg.GetPrimAtPath(check_path)
+                if prim and prim.IsValid():
+                    return cand
+        # Fallback to prefix-based candidate
+        return candidates[0] if is_splatforge else (candidates[1] if len(candidates) > 1 else candidates[0])
+
+    # Define surface map specs with context-accurate geometry paths
     if proj_mode == "room_box":
         surfaces = [
-            ("floor", "floor_mat", planar_textures.get("floor", hdri_tex), "/environment/ground_dome/floor"),
-            ("ceiling", "ceiling_mat", planar_textures.get("ceiling", hdri_tex), "/environment/ground_dome/ceiling"),
-            ("wall_north", "wall_north_mat", planar_textures.get("wall_north", hdri_tex), "/environment/ground_dome/walls/wall_north /environment/ground_dome/wall_north"),
-            ("wall_south", "wall_south_mat", planar_textures.get("wall_south", hdri_tex), "/environment/ground_dome/walls/wall_south /environment/ground_dome/wall_south"),
-            ("wall_east", "wall_east_mat", planar_textures.get("wall_east", hdri_tex), "/environment/ground_dome/walls/wall_east /environment/ground_dome/wall_east"),
-            ("wall_west", "wall_west_mat", planar_textures.get("wall_west", hdri_tex), "/environment/ground_dome/walls/wall_west /environment/ground_dome/wall_west"),
-            ("props", "props_mat", planar_textures.get("props", hdri_tex), "/environment/ground_dome/props /stage/room/props /environment/ground_dome/props/* /stage/room/props/*"),
+            ("floor", "floor_mat", planar_textures.get("floor", hdri_tex),
+             _resolve_geopath(["/stage/room/floor", "/environment/ground_dome/floor", "/world/room/floor"])),
+            ("ceiling", "ceiling_mat", planar_textures.get("ceiling", hdri_tex),
+             _resolve_geopath(["/stage/room/ceiling", "/environment/ground_dome/ceiling", "/world/room/ceiling"])),
+            ("wall_north", "wall_north_mat", planar_textures.get("wall_north", hdri_tex),
+             _resolve_geopath(["/stage/room/walls/wall_north", "/environment/ground_dome/walls/wall_north", "/environment/ground_dome/wall_north"])),
+            ("wall_south", "wall_south_mat", planar_textures.get("wall_south", hdri_tex),
+             _resolve_geopath(["/stage/room/walls/wall_south", "/environment/ground_dome/walls/wall_south", "/environment/ground_dome/wall_south"])),
+            ("wall_east", "wall_east_mat", planar_textures.get("wall_east", hdri_tex),
+             _resolve_geopath(["/stage/room/walls/wall_east", "/environment/ground_dome/walls/wall_east", "/environment/ground_dome/wall_east"])),
+            ("wall_west", "wall_west_mat", planar_textures.get("wall_west", hdri_tex),
+             _resolve_geopath(["/stage/room/walls/wall_west", "/environment/ground_dome/walls/wall_west", "/environment/ground_dome/wall_west"])),
+            ("props", "props_mat", planar_textures.get("props", hdri_tex),
+             _resolve_geopath(["/stage/room/props/*", "/environment/ground_dome/props/*", "/world/room/props/*"])),
         ]
     else:
         # Ground disc mode
         ground_tex = planar_textures.get("ground", hdri_tex)
         surfaces = [
-            ("ground", "ground_mat", ground_tex, "/environment/ground_dome/ground_plane /environment/ground_dome/ground_mesh /environment/ground_dome/ground_disc"),
+            ("ground", "ground_mat", ground_tex,
+             _resolve_geopath(["/environment/ground_dome/ground_plane", "/environment/ground_dome/ground_mesh", "/environment/ground_dome/ground_disc"])),
         ]
 
     active_mat_names = {s[1] for s in surfaces}
@@ -892,19 +927,29 @@ def create_or_update_material_library(stage_node, p):
                     rs_mat.destroy()
                 rs_mat = mat_lib.createNode("redshift::StandardMaterial", mat_name)
 
-            rs_tex_name = f"{surf_key}_tex"
-            rs_tex = mat_lib.node(rs_tex_name)
-            if rs_tex is None or rs_tex.type().name() != "redshift::TextureSampler":
-                if rs_tex is not None:
-                    rs_tex.destroy()
-                rs_tex = mat_lib.createNode("redshift::TextureSampler", rs_tex_name)
+            if surf_key == "props" and not norm_tex_path:
+                rs_tex_name = f"{surf_key}_vcol"
+                rs_tex = mat_lib.node(rs_tex_name)
+                if rs_tex is None or rs_tex.type().name() != "redshift::RSUserDataColor":
+                    if rs_tex is not None:
+                        rs_tex.destroy()
+                    rs_tex = mat_lib.createNode("redshift::RSUserDataColor", rs_tex_name)
+                if rs_tex.parm("attribute"):
+                    rs_tex.parm("attribute").set("displayColor")
+            else:
+                rs_tex_name = f"{surf_key}_tex"
+                rs_tex = mat_lib.node(rs_tex_name)
+                if rs_tex is None or rs_tex.type().name() != "redshift::TextureSampler":
+                    if rs_tex is not None:
+                        rs_tex.destroy()
+                    rs_tex = mat_lib.createNode("redshift::TextureSampler", rs_tex_name)
 
-            if rs_tex.parm("tex0") and norm_tex_path:
-                rs_tex.parm("tex0").set(norm_tex_path)
-            if rs_tex.parm("tex0_colorSpace"):
-                rs_tex.parm("tex0_colorSpace").set("Raw")
-            if rs_tex.parm("tspace_id"):
-                rs_tex.parm("tspace_id").set("st")
+                if rs_tex.parm("tex0") and norm_tex_path:
+                    rs_tex.parm("tex0").set(norm_tex_path)
+                if rs_tex.parm("tex0_colorSpace"):
+                    rs_tex.parm("tex0_colorSpace").set("Raw")
+                if rs_tex.parm("tspace_id"):
+                    rs_tex.parm("tspace_id").set("st")
 
             # Mode wiring: Emissive, PBR+Emissive, or PBR
             if mat_mode == "emissive":
@@ -983,19 +1028,29 @@ def create_or_update_material_library(stage_node, p):
                     ai_mat.destroy()
                 ai_mat = amb.createNode("arnold::standard_surface", ai_mat_name)
 
-            ai_tex_name = f"{surf_key}_image"
-            ai_tex = amb.node(ai_tex_name)
-            if ai_tex is None or ai_tex.type().name() != "arnold::image":
-                if ai_tex is not None:
-                    ai_tex.destroy()
-                ai_tex = amb.createNode("arnold::image", ai_tex_name)
+            if surf_key == "props" and not norm_tex_path:
+                ai_tex_name = f"{surf_key}_vcol"
+                ai_tex = amb.node(ai_tex_name)
+                if ai_tex is None or ai_tex.type().name() != "arnold::user_data_rgb":
+                    if ai_tex is not None:
+                        ai_tex.destroy()
+                    ai_tex = amb.createNode("arnold::user_data_rgb", ai_tex_name)
+                if ai_tex.parm("attribute"):
+                    ai_tex.parm("attribute").set("displayColor")
+            else:
+                ai_tex_name = f"{surf_key}_image"
+                ai_tex = amb.node(ai_tex_name)
+                if ai_tex is None or ai_tex.type().name() != "arnold::image":
+                    if ai_tex is not None:
+                        ai_tex.destroy()
+                    ai_tex = amb.createNode("arnold::image", ai_tex_name)
 
-            if ai_tex.parm("filename") and norm_tex_path:
-                ai_tex.parm("filename").set(norm_tex_path)
-            if ai_tex.parm("color_space"):
-                ai_tex.parm("color_space").set("raw")
-            if ai_tex.parm("uvset"):
-                ai_tex.parm("uvset").set("st")
+                if ai_tex.parm("filename") and norm_tex_path:
+                    ai_tex.parm("filename").set(norm_tex_path)
+                if ai_tex.parm("color_space"):
+                    ai_tex.parm("color_space").set("raw")
+                if ai_tex.parm("uvset"):
+                    ai_tex.parm("uvset").set("st")
 
             if out_mat:
                 out_mat.setInput(0, ai_mat, 0)
@@ -1066,25 +1121,33 @@ def create_or_update_material_library(stage_node, p):
                     km_mat.destroy()
                 km_mat = mat_lib.createNode("mtlxstandard_surface", mat_name)
 
-            km_tex_name = f"{surf_key}_tex"
-            km_tex = mat_lib.node(km_tex_name)
-            if km_tex is None or km_tex.type().name() != "mtlximage":
-                if km_tex is not None:
-                    km_tex.destroy()
-                km_tex = mat_lib.createNode("mtlximage", km_tex_name)
+            if surf_key == "props" and not norm_tex_path:
+                km_tex_name = f"{surf_key}_vcol"
+                km_tex = mat_lib.node(km_tex_name)
+                if km_tex is None or km_tex.type().name() != "mtlxgeomcolor":
+                    if km_tex is not None:
+                        km_tex.destroy()
+                    km_tex = mat_lib.createNode("mtlxgeomcolor", km_tex_name)
+            else:
+                km_tex_name = f"{surf_key}_tex"
+                km_tex = mat_lib.node(km_tex_name)
+                if km_tex is None or km_tex.type().name() != "mtlximage":
+                    if km_tex is not None:
+                        km_tex.destroy()
+                    km_tex = mat_lib.createNode("mtlximage", km_tex_name)
 
-            if km_tex.parm("file") and norm_tex_path:
-                km_tex.parm("file").set(norm_tex_path)
+                if km_tex.parm("file") and norm_tex_path:
+                    km_tex.parm("file").set(norm_tex_path)
 
-            km_uv_name = f"{surf_key}_uv"
-            km_uv = mat_lib.node(km_uv_name)
-            if km_uv is None or km_uv.type().name() != "mtlxtexcoord":
-                if km_uv is not None:
-                    km_uv.destroy()
-                km_uv = mat_lib.createNode("mtlxtexcoord", km_uv_name)
-            if km_uv.parm("index"):
-                km_uv.parm("index").set(0)
-            km_tex.setInput(3, km_uv, 0)  # texcoord
+                km_uv_name = f"{surf_key}_uv"
+                km_uv = mat_lib.node(km_uv_name)
+                if km_uv is None or km_uv.type().name() != "mtlxtexcoord":
+                    if km_uv is not None:
+                        km_uv.destroy()
+                    km_uv = mat_lib.createNode("mtlxtexcoord", km_uv_name)
+                if km_uv.parm("index"):
+                    km_uv.parm("index").set(0)
+                km_tex.setInput(3, km_uv, 0)  # texcoord
 
             # Determine specular & roughness values for MaterialX
             if is_all_renderers:
@@ -1175,43 +1238,58 @@ def create_or_update_material_library(stage_node, p):
                     ups.destroy()
                 ups = mat_lib.createNode("usdpreviewsurface", mat_name)
 
-            tex_node_name = f"{surf_key}_tex"
-            tex_node = mat_lib.node(tex_node_name)
-            if tex_node is None or not tex_node.type().name().startswith("usduvtexture"):
-                if tex_node is not None:
-                    tex_node.destroy()
-                tex_node = mat_lib.createNode("usduvtexture", tex_node_name)
+            if surf_key == "props" and not norm_tex_path:
+                vcol_name = f"{surf_key}_vcol"
+                tex_node = mat_lib.node(vcol_name)
+                if tex_node is None or tex_node.type().name() != "usdprimvarreader":
+                    if tex_node is not None:
+                        tex_node.destroy()
+                    tex_node = mat_lib.createNode("usdprimvarreader", vcol_name)
+                if tex_node.parm("varname"):
+                    tex_node.parm("varname").set("displayColor")
+                if tex_node.parm("signature"):
+                    tex_node.parm("signature").set("float3")
+                tex_rgb_idx = 0
+                tex_out_token = "result"
+            else:
+                tex_node_name = f"{surf_key}_tex"
+                tex_node = mat_lib.node(tex_node_name)
+                if tex_node is None or not tex_node.type().name().startswith("usduvtexture"):
+                    if tex_node is not None:
+                        tex_node.destroy()
+                    tex_node = mat_lib.createNode("usduvtexture", tex_node_name)
 
-            st_node_name = f"{surf_key}_st"
-            st_node = mat_lib.node(st_node_name)
-            if st_node is None or st_node.type().name() != "usdprimvarreader":
-                if st_node is not None:
-                    st_node.destroy()
-                st_node = mat_lib.createNode("usdprimvarreader", st_node_name)
+                st_node_name = f"{surf_key}_st"
+                st_node = mat_lib.node(st_node_name)
+                if st_node is None or st_node.type().name() != "usdprimvarreader":
+                    if st_node is not None:
+                        st_node.destroy()
+                    st_node = mat_lib.createNode("usdprimvarreader", st_node_name)
 
-            if st_node.parm("varname"):
-                st_node.parm("varname").set("st")
-            if st_node.parm("signature"):
-                st_node.parm("signature").set("float2")
+                if st_node.parm("varname"):
+                    st_node.parm("varname").set("st")
+                if st_node.parm("signature"):
+                    st_node.parm("signature").set("float2")
 
-            if tex_node.parm("file") and norm_tex_path:
-                tex_node.parm("file").set(norm_tex_path)
-            if tex_node.parm("wrapS"):
-                tex_node.parm("wrapS").set("clamp")
-            if tex_node.parm("wrapT"):
-                tex_node.parm("wrapT").set("clamp")
+                if tex_node.parm("file") and norm_tex_path:
+                    tex_node.parm("file").set(norm_tex_path)
+                if tex_node.parm("wrapS"):
+                    tex_node.parm("wrapS").set("clamp")
+                if tex_node.parm("wrapT"):
+                    tex_node.parm("wrapT").set("clamp")
 
-            tex_node.setInput(1, st_node, 0)
+                tex_node.setInput(1, st_node, 0)
 
-            # Determine output index for 'rgb' on usduvtexture (index 4 in Houdini VOPs; index 0 is 'r')
-            tex_rgb_idx = 4
-            if hasattr(tex_node, "outputIndex"):
-                try:
-                    oi = tex_node.outputIndex("rgb")
-                    if oi >= 0:
-                        tex_rgb_idx = oi
-                except Exception:
-                    pass
+                # Determine output index for 'rgb' on usduvtexture (index 4 in Houdini VOPs; index 0 is 'r')
+                tex_rgb_idx = 4
+                tex_out_token = "rgb"
+                if hasattr(tex_node, "outputIndex"):
+                    try:
+                        oi = tex_node.outputIndex("rgb")
+                        if oi >= 0:
+                            tex_rgb_idx = oi
+                    except Exception:
+                        pass
 
             diff_idx = 0
             emis_idx = 1
@@ -1232,7 +1310,7 @@ def create_or_update_material_library(stage_node, p):
                 connected_emis = False
                 if hasattr(ups, "setNamedInput"):
                     try:
-                        ups.setNamedInput("emissiveColor", tex_node, "rgb")
+                        ups.setNamedInput("emissiveColor", tex_node, tex_out_token)
                         connected_emis = True
                     except Exception:
                         pass
@@ -1268,7 +1346,7 @@ def create_or_update_material_library(stage_node, p):
                 connected_diff = False
                 if hasattr(ups, "setNamedInput"):
                     try:
-                        ups.setNamedInput("diffuseColor", tex_node, "rgb")
+                        ups.setNamedInput("diffuseColor", tex_node, tex_out_token)
                         connected_diff = True
                     except Exception:
                         pass
@@ -1279,7 +1357,7 @@ def create_or_update_material_library(stage_node, p):
                 connected_emis = False
                 if hasattr(ups, "setNamedInput"):
                     try:
-                        ups.setNamedInput("emissiveColor", tex_node, "rgb")
+                        ups.setNamedInput("emissiveColor", tex_node, tex_out_token)
                         connected_emis = True
                     except Exception:
                         pass
@@ -1302,7 +1380,7 @@ def create_or_update_material_library(stage_node, p):
                 connected_diff = False
                 if hasattr(ups, "setNamedInput"):
                     try:
-                        ups.setNamedInput("diffuseColor", tex_node, "rgb")
+                        ups.setNamedInput("diffuseColor", tex_node, tex_out_token)
                         connected_diff = True
                     except Exception:
                         pass

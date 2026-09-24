@@ -1533,8 +1533,11 @@ def wire_solaris_stage_stream(stage_node):
     dome = stage_node.node("hdri_dome")
     sun = stage_node.node("hdri_sun")
     cloud = stage_node.node("splat_scene_cloud")
+    bakegs = stage_node.node("splat_scene_bakegs")
     splat_points = stage_node.node("splat_points_ref")
     room = stage_node.node("splat_room_architecture")
+    splat_mat_lib = stage_node.node("splatforge_materials")
+    hdri_mat_lib = stage_node.node("hdri_match_materials")
 
     portals = sorted(
         [c for c in stage_node.children() if c.name().startswith("portal_") and "light" in c.type().name()],
@@ -1559,8 +1562,15 @@ def wire_solaris_stage_stream(stage_node):
     if dome: chain.append(dome)
     if sun: chain.append(sun)
     if cloud and not cloud.isBypassed(): chain.append(cloud)
+    if bakegs and not bakegs.isBypassed(): chain.append(bakegs)
     if splat_points and not splat_points.isBypassed(): chain.append(splat_points)
     if room and not room.isBypassed(): chain.append(room)
+    if splat_mat_lib and not splat_mat_lib.isBypassed():
+        chain.append(splat_mat_lib)
+        if hdri_mat_lib:
+            hdri_mat_lib.bypass(True)
+    elif hdri_mat_lib and not hdri_mat_lib.isBypassed() and hdri_mat_lib not in chain:
+        chain.append(hdri_mat_lib)
     for p in portals:
         if not p.isBypassed(): chain.append(p)
     if props_ref and not props_ref.isBypassed(): chain.append(props_ref)
@@ -1576,7 +1586,7 @@ def wire_solaris_stage_stream(stage_node):
     probe = stage_node.node("hdri_match_splat_probe")
     if probe:
         managed_set.add(probe)
-    for n in (dome, sun, cloud, splat_points, room, props_ref, props_proj, mesh_texturizer, lookdev, crucible):
+    for n in (dome, sun, cloud, bakegs, splat_points, room, splat_mat_lib, hdri_mat_lib, props_ref, props_proj, mesh_texturizer, lookdev, crucible):
         if n: managed_set.add(n)
     for p in portals:
         managed_set.add(p)
@@ -1641,7 +1651,7 @@ def build_usd_room_architecture(
     roughness=0.85,
     snap_lookdev_to_floor=True,
     double_sided=True,
-    room_shadows=False,
+    room_shadows=True,
     room_invisible=False,
     portal_intensity_mult=1.0,
     portal_texture_mode="cropped",
@@ -1667,6 +1677,31 @@ def build_usd_room_architecture(
     if not room_node:
         room_node = stage_node.createNode("pythonscript", node_name)
         room_node.setColor(hou.Color((0.85, 0.45, 0.2)))
+
+    # Ensure spare parameters exist on splat_room_architecture for interactive live tweaking
+    ptg = room_node.parmTemplateGroup()
+    parms_to_add = [
+        hou.ToggleParmTemplate("double_sided", "Double-Sided Walls", default_value=bool(double_sided)),
+        hou.ToggleParmTemplate("room_shadows", "Room Casts Shadows", default_value=bool(room_shadows)),
+        hou.ToggleParmTemplate("room_invisible", "Invisible Room", default_value=bool(room_invisible)),
+    ]
+    modified_ptg = False
+    for pt in parms_to_add:
+        if not ptg.find(pt.name()):
+            ptg.append(pt)
+            modified_ptg = True
+    if modified_ptg:
+        room_node.setParmTemplateGroup(ptg)
+
+    if room_node.parm("double_sided"): room_node.parm("double_sided").set(bool(double_sided))
+    if room_node.parm("room_shadows"): room_node.parm("room_shadows").set(bool(room_shadows))
+    if room_node.parm("room_invisible"): room_node.parm("room_invisible").set(bool(room_invisible))
+
+    # Ensure conflicting legacy projection nodes (hdri_match_projection, hdri_match_materials) are bypassed
+    for p_name in ("hdri_match_projection", "hdri_match_materials"):
+        pn = stage_node.node(p_name)
+        if pn:
+            pn.bypass(True)
 
     if "all" in str(renderer_target).lower():
         roughness = 1.0
@@ -1748,9 +1783,9 @@ def build_usd_room_architecture(
         f'cam_x = float({cam_x})',
         f'cam_y = float({cam_y})',
         f'cam_z = float({cam_z})',
-        f'double_sided = bool({double_sided})',
-        f'room_shadows = bool({room_shadows})',
-        f'room_invisible = bool({room_invisible})',
+        f'double_sided = bool(hou.pwd().parm("double_sided").eval() if hou.pwd().parm("double_sided") else {double_sided})',
+        f'room_shadows = bool(hou.pwd().parm("room_shadows").eval() if hou.pwd().parm("room_shadows") else {room_shadows})',
+        f'room_invisible = bool(hou.pwd().parm("room_invisible").eval() if hou.pwd().parm("room_invisible") else {room_invisible})',
         f'tex_file = r"{tex_file}"',
         f'roughness = float({roughness})',
         f'project_hdri = bool({project_hdri})',
@@ -1784,7 +1819,7 @@ def build_usd_room_architecture(
         '    v = 0.5 - (math.asin(max(-1.0, min(1.0, vy))) / math.pi)',
         '    return float(u), float(v)',
         '',
-        'def add_grid_to_buffers(pts, normals, face_counts, face_indices, face_uvs, colors, corners, normal, nx=6, ny=6, uv_bounds=None):',
+        'def add_grid_to_buffers(pts, normals, face_counts, face_indices, face_uvs, colors, corners, normal, nx=6, ny=6, uv_bounds=None, fallback_col=(0.5, 0.5, 0.5)):',
         '    P00, P10, P11, P01 = corners',
         '    grid_indices = np.zeros((ny + 1, nx + 1), dtype=int)',
         '    for j in range(ny + 1):',
@@ -1803,7 +1838,7 @@ def build_usd_room_architecture(
         '                                       float(np.nan_to_num(hdri_arr[px_y, px_x, 1])),',
         '                                       float(np.nan_to_num(hdri_arr[px_y, px_x, 2]))))',
         '            else:',
-        '                colors.append(Gf.Vec3f(0.5, 0.5, 0.5))',
+        '                colors.append(Gf.Vec3f(float(fallback_col[0]), float(fallback_col[1]), float(fallback_col[2])))',
         '',
         '    for j in range(ny):',
         '        for i in range(nx):',
@@ -1847,35 +1882,30 @@ def build_usd_room_architecture(
         '                                 Gf.Vec2f(float(u2), float(1.0 - v2)),',
         '                                 Gf.Vec2f(float(u3), float(1.0 - v3))])',
         '',
-        'def add_box_face_grid(pts, normals, face_counts, face_indices, face_uvs, colors, corners, normal, base_col, nx=4, ny=4, uv_rect=(0.0, 0.0, 1.0, 1.0)):',
-        '    P00, P10, P11, P01 = corners',
-        '    u0, v0, u1, v1 = uv_rect',
-        '    grid_indices = np.zeros((ny + 1, nx + 1), dtype=int)',
-        '    for j in range(ny + 1):',
-        '        tj = float(j) / float(ny)',
-        '        for i in range(nx + 1):',
-        '            ti = float(i) / float(nx)',
-        '            P = (1.0 - ti) * (1.0 - tj) * P00 + ti * (1.0 - tj) * P10 + ti * tj * P11 + (1.0 - ti) * tj * P01',
-        '            grid_indices[j, i] = len(pts)',
-        '            pts.append(Gf.Vec3f(float(P[0]), float(P[1]), float(P[2])))',
-        '            normals.append(Gf.Vec3f(float(normal[0]), float(normal[1]), float(normal[2])))',
-        '            colors.append(Gf.Vec3f(float(base_col[0]), float(base_col[1]), float(base_col[2])))',
-        '    for j in range(ny):',
-        '        for i in range(nx):',
-        '            idx0 = int(grid_indices[j, i])',
-        '            idx1 = int(grid_indices[j, i + 1])',
-        '            idx2 = int(grid_indices[j + 1, i + 1])',
-        '            idx3 = int(grid_indices[j + 1, i])',
-        '            face_counts.append(4)',
-        '            face_indices.extend([idx0, idx1, idx2, idx3])',
-        '            ti0, tj0 = float(i) / float(nx), float(j) / float(ny)',
-        '            ti1, tj1 = float(i + 1) / float(nx), float(j + 1) / float(ny)',
-        '            face_uvs.extend([',
-        '                Gf.Vec2f(u0 + ti0 * (u1 - u0), v0 + tj0 * (v1 - v0)),',
-        '                Gf.Vec2f(u0 + ti1 * (u1 - u0), v0 + tj0 * (v1 - v0)),',
-        '                Gf.Vec2f(u0 + ti1 * (u1 - u0), v0 + tj1 * (v1 - v0)),',
-        '                Gf.Vec2f(u0 + ti0 * (u1 - u0), v0 + tj1 * (v1 - v0))',
-        '            ])',
+        'def sample_point_color(px, py, pz, fallback_col=(0.65, 0.65, 0.65)):',
+        '    if hdri_arr is not None:',
+        '        u, v = project_point(px, py, pz)',
+        '        px_x = int(np.clip(u * img_w, 0, img_w - 1))',
+        '        px_y = int(np.clip(v * img_h, 0, img_h - 1))',
+        '        return Gf.Vec3f(float(np.nan_to_num(hdri_arr[px_y, px_x, 0])),',
+        '                        float(np.nan_to_num(hdri_arr[px_y, px_x, 1])),',
+        '                        float(np.nan_to_num(hdri_arr[px_y, px_x, 2])))',
+        '    return Gf.Vec3f(float(fallback_col[0]), float(fallback_col[1]), float(fallback_col[2]))',
+        '',
+        'def compute_projected_face_uvs(face_pts):',
+        '    u_vals, v_vals = [], []',
+        '    for pt in face_pts:',
+        '        u, v = project_point(pt[0], pt[1], pt[2])',
+        '        u_vals.append(u)',
+        '        v_vals.append(v)',
+        '    if max(u_vals) - min(u_vals) > 0.5:',
+        '        for k in range(len(u_vals)):',
+        '            if u_vals[k] < 0.5:',
+        '                u_vals[k] += 1.0',
+        '    return [Gf.Vec2f(float(u), float(1.0 - v)) for u, v in zip(u_vals, v_vals)]',
+        '',
+        'def add_box_face_grid(pts, normals, face_counts, face_indices, face_uvs, colors, corners, normal, base_col, nx=4, ny=4, uv_rect=None):',
+        '    add_grid_to_buffers(pts, normals, face_counts, face_indices, face_uvs, colors, corners, normal, nx=nx, ny=ny, uv_bounds=None, fallback_col=base_col)',
         '',
     ]
 
@@ -1917,8 +1947,12 @@ def build_usd_room_architecture(
             '    # Visible Floor: Renders as opaque physical surface with projected HDRI floor texture',
             '    f_prim.CreateAttribute("primvars:arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
             '    f_prim.CreateAttribute("arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '    f_prim.CreateAttribute("primvars:arnold:visibility:shadow", Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))',
+            '    f_prim.CreateAttribute("arnold:visibility:shadow", Sdf.ValueTypeNames.Int, False).Set(1 if room_shadows else 0)',
+            '    f_prim.CreateAttribute("primvars:redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))',
+            '    f_prim.CreateAttribute("redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))',
             '    if room_invisible:',
-            '        karma_vis = "* ^primary ^shadow" if not room_shadows else "* ^primary"',
+            '        karma_vis = "diffuse reflect refract" if not room_shadows else "diffuse reflect refract shadow"',
             '        f_prim.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set(karma_vis)',
             '        f_prim.CreateAttribute("primvars:arnold:visibility:camera", Sdf.ValueTypeNames.Bool, False).Set(False)',
             '        f_prim.CreateAttribute("arnold:visibility:camera", Sdf.ValueTypeNames.Int, False).Set(0)',
@@ -1927,7 +1961,7 @@ def build_usd_room_architecture(
             '        f_prim.CreateAttribute("primvars:redshift:object:MESHFLAG_PRIMARYRAYVIS", Sdf.ValueTypeNames.Bool, False).Set(False)',
             '        f_prim.CreateAttribute("redshift:object:MESHFLAG_PRIMARYRAYVIS", Sdf.ValueTypeNames.Bool, False).Set(False)',
             '    else:',
-            '        karma_vis = "* ^shadow" if not room_shadows else "*"',
+            '        karma_vis = "primary diffuse reflect refract" if not room_shadows else "*"',
             '        f_prim.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set(karma_vis)',
             '        f_prim.CreateAttribute("primvars:arnold:visibility:camera", Sdf.ValueTypeNames.Bool, False).Set(True)',
             '        f_prim.CreateAttribute("arnold:visibility:camera", Sdf.ValueTypeNames.Int, False).Set(1)',
@@ -1968,15 +2002,14 @@ def build_usd_room_architecture(
             'ceil_mesh.CreateDisplayOpacityPrimvar(UsdGeom.Tokens.vertex).Set(Vt.FloatArray([1.0] * len(c_pts)))',
             'c_prim = ceil_mesh.GetPrim()',
             'c_prim.CreateAttribute("primvars:karma:object:dicing:quality", Sdf.ValueTypeNames.Float, False).Set(0.0)',
-            'if not room_shadows:',
-            '    c_prim.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set("* ^shadow")',
-            '    c_prim.CreateAttribute("primvars:arnold:visibility:shadow", Sdf.ValueTypeNames.Bool, False).Set(False)',
-            '    c_prim.CreateAttribute("primvars:arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(False)',
-            '    c_prim.CreateAttribute("primvars:redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(False)',
-            'else:',
-            '    c_prim.CreateAttribute("primvars:arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            'c_prim.CreateAttribute("primvars:arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            'c_prim.CreateAttribute("arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            'c_prim.CreateAttribute("primvars:arnold:visibility:shadow", Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))',
+            'c_prim.CreateAttribute("arnold:visibility:shadow", Sdf.ValueTypeNames.Int, False).Set(1 if room_shadows else 0)',
+            'c_prim.CreateAttribute("primvars:redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))',
+            'c_prim.CreateAttribute("redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))',
             'if room_invisible:',
-            '    karma_vis = "* ^primary ^shadow" if not room_shadows else "* ^primary"',
+            '    karma_vis = "diffuse reflect refract" if not room_shadows else "diffuse reflect refract shadow"',
             '    c_prim.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set(karma_vis)',
             '    c_prim.CreateAttribute("primvars:arnold:visibility:camera", Sdf.ValueTypeNames.Bool, False).Set(False)',
             '    c_prim.CreateAttribute("arnold:visibility:camera", Sdf.ValueTypeNames.Int, False).Set(0)',
@@ -1985,7 +2018,7 @@ def build_usd_room_architecture(
             '    c_prim.CreateAttribute("primvars:redshift:object:MESHFLAG_PRIMARYRAYVIS", Sdf.ValueTypeNames.Bool, False).Set(False)',
             '    c_prim.CreateAttribute("redshift:object:MESHFLAG_PRIMARYRAYVIS", Sdf.ValueTypeNames.Bool, False).Set(False)',
             'else:',
-            '    karma_vis = "* ^shadow" if not room_shadows else "*"',
+            '    karma_vis = "primary diffuse reflect refract" if not room_shadows else "*"',
             '    c_prim.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set(karma_vis)',
             '    c_prim.CreateAttribute("primvars:arnold:visibility:camera", Sdf.ValueTypeNames.Bool, False).Set(True)',
             '    c_prim.CreateAttribute("arnold:visibility:camera", Sdf.ValueTypeNames.Int, False).Set(1)',
@@ -2101,15 +2134,14 @@ def build_usd_room_architecture(
                 f"{wall_mesh_name}.CreateDisplayOpacityPrimvar(UsdGeom.Tokens.vertex).Set(Vt.FloatArray([1.0] * len(w_pts)))",
                 f"w_prim = {wall_mesh_name}.GetPrim()",
                 f"w_prim.CreateAttribute('primvars:karma:object:dicing:quality', Sdf.ValueTypeNames.Float, False).Set(0.0)",
-                "if not room_shadows:",
-                "    w_prim.CreateAttribute('primvars:karma:object:rendervisibility', Sdf.ValueTypeNames.String, False).Set('* ^shadow')",
-                "    w_prim.CreateAttribute('primvars:arnold:visibility:shadow', Sdf.ValueTypeNames.Bool, False).Set(False)",
-                "    w_prim.CreateAttribute('primvars:arnold:opaque', Sdf.ValueTypeNames.Bool, False).Set(False)",
-                "    w_prim.CreateAttribute('primvars:redshift:object:MESHFLAG_SHADOWCASTER', Sdf.ValueTypeNames.Bool, False).Set(False)",
-                "else:",
-                "    w_prim.CreateAttribute('primvars:arnold:opaque', Sdf.ValueTypeNames.Bool, False).Set(True)",
+                "w_prim.CreateAttribute('primvars:arnold:opaque', Sdf.ValueTypeNames.Bool, False).Set(True)",
+                "w_prim.CreateAttribute('arnold:opaque', Sdf.ValueTypeNames.Bool, False).Set(True)",
+                "w_prim.CreateAttribute('primvars:arnold:visibility:shadow', Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))",
+                "w_prim.CreateAttribute('arnold:visibility:shadow', Sdf.ValueTypeNames.Int, False).Set(1 if room_shadows else 0)",
+                "w_prim.CreateAttribute('primvars:redshift:object:MESHFLAG_SHADOWCASTER', Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))",
+                "w_prim.CreateAttribute('redshift:object:MESHFLAG_SHADOWCASTER', Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))",
                 "if room_invisible:",
-                "    karma_vis = '* ^primary ^shadow' if not room_shadows else '* ^primary'",
+                "    karma_vis = 'diffuse reflect refract' if not room_shadows else 'diffuse reflect refract shadow'",
                 "    w_prim.CreateAttribute('primvars:karma:object:rendervisibility', Sdf.ValueTypeNames.String, False).Set(karma_vis)",
                 "    w_prim.CreateAttribute('primvars:arnold:visibility:camera', Sdf.ValueTypeNames.Bool, False).Set(False)",
                 "    w_prim.CreateAttribute('arnold:visibility:camera', Sdf.ValueTypeNames.Int, False).Set(0)",
@@ -2118,7 +2150,7 @@ def build_usd_room_architecture(
                 "    w_prim.CreateAttribute('primvars:redshift:object:MESHFLAG_PRIMARYRAYVIS', Sdf.ValueTypeNames.Bool, False).Set(False)",
                 "    w_prim.CreateAttribute('redshift:object:MESHFLAG_PRIMARYRAYVIS', Sdf.ValueTypeNames.Bool, False).Set(False)",
                 "else:",
-                "    karma_vis = '* ^shadow' if not room_shadows else '*'",
+                "    karma_vis = 'primary diffuse reflect refract' if not room_shadows else '*'",
                 "    w_prim.CreateAttribute('primvars:karma:object:rendervisibility', Sdf.ValueTypeNames.String, False).Set(karma_vis)",
                 "    w_prim.CreateAttribute('primvars:arnold:visibility:camera', Sdf.ValueTypeNames.Bool, False).Set(True)",
                 "    w_prim.CreateAttribute('arnold:visibility:camera', Sdf.ValueTypeNames.Int, False).Set(1)",
@@ -2149,6 +2181,8 @@ def build_usd_room_architecture(
             '    p_min = prop.get("b_min", [-0.5, 0.0, -0.5])',
             '    p_max = prop.get("b_max", [0.5, 1.0, 0.5])',
             '    p_center = prop.get("center", [0.0, 0.5, 0.0])',
+            '    p_yaw = float(prop.get("yaw", 0.0))',
+            '    obb_sz = prop.get("obb_size", [p_max[0]-p_min[0], p_max[1]-p_min[1], p_max[2]-p_min[2]])',
             '    p_rad = float(prop.get("radius", 0.3))',
             '    p_col = prop.get("color", [0.65, 0.65, 0.65])',
             '    p_mesh_path = f"/stage/room/props/{p_name}"',
@@ -2165,63 +2199,111 @@ def build_usd_room_architecture(
             '        cx, cz = p_center[0], p_center[2]',
             '        for k in range(segments):',
             '            th = 2.0 * math.pi * k / segments',
-            '            pts.append(Gf.Vec3f(cx + p_rad * math.cos(th), y0, cz + p_rad * math.sin(th)))',
-            '            cols.append(Gf.Vec3f(float(p_col[0]), float(p_col[1]), float(p_col[2])))',
+            '            px = cx + p_rad * math.cos(th)',
+            '            pz = cz + p_rad * math.sin(th)',
+            '            pts.append(Gf.Vec3f(px, y0, pz))',
+            '            cols.append(sample_point_color(px, y0, pz, p_col))',
             '        for k in range(segments):',
             '            th = 2.0 * math.pi * k / segments',
-            '            pts.append(Gf.Vec3f(cx + p_rad * math.cos(th), y1, cz + p_rad * math.sin(th)))',
-            '            cols.append(Gf.Vec3f(float(p_col[0]), float(p_col[1]), float(p_col[2])))',
+            '            px = cx + p_rad * math.cos(th)',
+            '            pz = cz + p_rad * math.sin(th)',
+            '            pts.append(Gf.Vec3f(px, y1, pz))',
+            '            cols.append(sample_point_color(px, y1, pz, p_col))',
             '        idx_bot = len(pts)',
             '        pts.append(Gf.Vec3f(cx, y0, cz))',
-            '        cols.append(Gf.Vec3f(float(p_col[0]), float(p_col[1]), float(p_col[2])))',
+            '        cols.append(sample_point_color(cx, y0, cz, p_col))',
             '        idx_top = len(pts)',
             '        pts.append(Gf.Vec3f(cx, y1, cz))',
-            '        cols.append(Gf.Vec3f(float(p_col[0]), float(p_col[1]), float(p_col[2])))',
+            '        cols.append(sample_point_color(cx, y1, cz, p_col))',
             '        for k in range(segments):',
             '            k_next = (k + 1) % segments',
             '            counts.append(4)',
             '            indices.extend([k, segments + k, segments + k_next, k_next])',
-            '            u0 = float(k) / float(segments)',
-            '            u1 = float(k + 1) / float(segments)',
-            '            uvs.extend([Gf.Vec2f(u0, 0.0), Gf.Vec2f(u1, 0.0), Gf.Vec2f(u1, 1.0), Gf.Vec2f(u0, 1.0)])',
+            '            uvs.extend(compute_projected_face_uvs([pts[k], pts[segments + k], pts[segments + k_next], pts[k_next]]))',
             '            th_m = 2.0 * math.pi * (k + 0.5) / segments',
             '            normals.append(Gf.Vec3f(math.cos(th_m), 0.0, math.sin(th_m)))',
             '        for k in range(segments):',
             '            k_next = (k + 1) % segments',
             '            counts.append(3)',
             '            indices.extend([idx_bot, k_next, k])',
-            '            th0 = 2.0 * math.pi * k / segments',
-            '            th1 = 2.0 * math.pi * k_next / segments',
-            '            uvs.extend([',
-            '                Gf.Vec2f(0.5, 0.5),',
-            '                Gf.Vec2f(0.5 + 0.5 * math.cos(th1), 0.5 + 0.5 * math.sin(th1)),',
-            '                Gf.Vec2f(0.5 + 0.5 * math.cos(th0), 0.5 + 0.5 * math.sin(th0))',
-            '            ])',
+            '            uvs.extend(compute_projected_face_uvs([pts[idx_bot], pts[k_next], pts[k]]))',
             '            normals.append(Gf.Vec3f(0.0, -1.0, 0.0))',
             '        for k in range(segments):',
             '            k_next = (k + 1) % segments',
             '            counts.append(3)',
             '            indices.extend([idx_top, segments + k, segments + k_next])',
-            '            th0 = 2.0 * math.pi * k / segments',
-            '            th1 = 2.0 * math.pi * k_next / segments',
-            '            uvs.extend([',
-            '                Gf.Vec2f(0.5, 0.5),',
-            '                Gf.Vec2f(0.5 + 0.5 * math.cos(th0), 0.5 + 0.5 * math.sin(th0)),',
-            '                Gf.Vec2f(0.5 + 0.5 * math.cos(th1), 0.5 + 0.5 * math.sin(th1))',
-            '            ])',
+            '            uvs.extend(compute_projected_face_uvs([pts[idx_top], pts[segments + k], pts[segments + k_next]]))',
             '            normals.append(Gf.Vec3f(0.0, 1.0, 0.0))',
             '        nrm_interp = UsdGeom.Tokens.uniform',
+            '    elif p_shape == "sphere":',
+            '        # UV Sphere proxy for ceiling lamps and spherical fixtures',
+            '        cx, cy, cz = float(p_center[0]), float(p_center[1]), float(p_center[2])',
+            '        r = float(p_rad)',
+            '        n_lat, n_lon = 10, 16',
+            '        for i in range(n_lat + 1):',
+            '            lat = math.pi * i / n_lat',
+            '            sy = cy + r * math.cos(lat)',
+            '            r_ring = r * math.sin(lat)',
+            '            for j in range(n_lon + 1):',
+            '                lon = 2.0 * math.pi * j / n_lon',
+            '                sx = cx + r_ring * math.cos(lon)',
+            '                sz = cz + r_ring * math.sin(lon)',
+            '                pts.append(Gf.Vec3f(sx, sy, sz))',
+            '                normals.append(Gf.Vec3f(math.sin(lat) * math.cos(lon), math.cos(lat), math.sin(lat) * math.sin(lon)))',
+            '                cols.append(sample_point_color(sx, sy, sz, p_col))',
+            '        for i in range(n_lat):',
+            '            for j in range(n_lon):',
+            '                p0 = i * (n_lon + 1) + j',
+            '                p1 = p0 + 1',
+            '                p2 = (i + 1) * (n_lon + 1) + j + 1',
+            '                p3 = (i + 1) * (n_lon + 1) + j',
+            '                counts.append(4)',
+            '                indices.extend([p0, p3, p2, p1])',
+            '                uvs.extend(compute_projected_face_uvs([pts[p0], pts[p3], pts[p2], pts[p1]]))',
+            '        nrm_interp = UsdGeom.Tokens.vertex',
+            '',
+            '        # If practical light emitter is enabled, create associated physical UsdLuxSphereLight',
+            '        if prop.get("is_light"):',
+            '            pl_path = f"/stage/room/props/{p_name}_light"',
+            '            pl_light = UsdLux.SphereLight.Define(stage, pl_path)',
+            '            pl_light.CreateIntensityAttr().Set(18.0)',
+            '            pl_light.CreateExposureAttr().Set(0.0)',
+            '            pl_light.CreateColorAttr().Set(Gf.Vec3f(1.0, 0.94, 0.82))',
+            '            pl_light.CreateRadiusAttr().Set(float(r * 0.85))',
+            '            pl_light.CreateNormalizeAttr().Set(False)',
+            '            pl_xform = UsdGeom.Xformable(pl_light.GetPrim())',
+            '            pl_xform.ClearXformOpOrder()',
+            '            pl_xform.AddTranslateOp().Set(Gf.Vec3d(cx, cy, cz))',
             '    else:',
+            '        # Oriented Bounding Box (OBB) using yaw and obb_size from PCA',
+            '        hx = float(obb_sz[0]) * 0.5',
+            '        hz = float(obb_sz[2]) * 0.5',
+            '        cx, cz = float(p_center[0]), float(p_center[2])',
+            '        rad = math.radians(p_yaw)',
+            '        cos_y = math.cos(rad)',
+            '        sin_y = math.sin(rad)',
+            '        c0 = np.array([cx - hx * cos_y + hz * sin_y, y0, cz - hx * sin_y - hz * cos_y])',
+            '        c1 = np.array([cx + hx * cos_y + hz * sin_y, y0, cz + hx * sin_y - hz * cos_y])',
+            '        c2 = np.array([cx + hx * cos_y - hz * sin_y, y0, cz + hx * sin_y + hz * cos_y])',
+            '        c3 = np.array([cx - hx * cos_y - hz * sin_y, y0, cz - hx * sin_y + hz * cos_y])',
+            '        t0 = np.array([c0[0], y1, c0[2]])',
+            '        t1 = np.array([c1[0], y1, c1[2]])',
+            '        t2 = np.array([c2[0], y1, c2[2]])',
+            '        t3 = np.array([c3[0], y1, c3[2]])',
+            '        n_back = (-sin_y, 0.0, -cos_y)',
+            '        n_front = (sin_y, 0.0, cos_y)',
+            '        n_left = (-cos_y, 0.0, sin_y)',
+            '        n_right = (cos_y, 0.0, -sin_y)',
             '        c_box_faces = [',
-            '            ([np.array([x0, y0, z0]), np.array([x1, y0, z0]), np.array([x1, y0, z1]), np.array([x0, y0, z1])], (0.0, -1.0, 0.0), (1.0/3.0, 0.0/2.0, 2.0/3.0, 1.0/2.0)), # bottom',
-            '            ([np.array([x0, y1, z1]), np.array([x1, y1, z1]), np.array([x1, y1, z0]), np.array([x0, y1, z0])], (0.0, 1.0, 0.0), (0.0/3.0, 0.0/2.0, 1.0/3.0, 1.0/2.0)), # top',
-            '            ([np.array([x1, y0, z0]), np.array([x0, y0, z0]), np.array([x0, y1, z0]), np.array([x1, y1, z0])], (0.0, 0.0, -1.0), (0.0/3.0, 1.0/2.0, 1.0/3.0, 2.0/2.0)), # back',
-            '            ([np.array([x0, y0, z1]), np.array([x1, y0, z1]), np.array([x1, y1, z1]), np.array([x0, y1, z1])], (0.0, 0.0, 1.0), (2.0/3.0, 0.0/2.0, 3.0/3.0, 1.0/2.0)), # front',
-            '            ([np.array([x0, y0, z0]), np.array([x0, y0, z1]), np.array([x0, y1, z1]), np.array([x0, y1, z0])], (-1.0, 0.0, 0.0), (1.0/3.0, 1.0/2.0, 2.0/3.0, 2.0/2.0)), # left',
-            '            ([np.array([x1, y0, z1]), np.array([x1, y0, z0]), np.array([x1, y1, z0]), np.array([x1, y1, z1])], (1.0, 0.0, 0.0), (2.0/3.0, 1.0/2.0, 3.0/3.0, 2.0/2.0)), # right',
+            '            ([c0, c1, c2, c3], (0.0, -1.0, 0.0), (1.0/3.0, 0.0/2.0, 2.0/3.0, 1.0/2.0)), # bottom',
+            '            ([t3, t2, t1, t0], (0.0, 1.0, 0.0), (0.0/3.0, 0.0/2.0, 1.0/3.0, 1.0/2.0)), # top',
+            '            ([c1, c0, t0, t1], n_back, (0.0/3.0, 1.0/2.0, 1.0/3.0, 2.0/2.0)), # back',
+            '            ([c3, c2, t2, t3], n_front, (2.0/3.0, 0.0/2.0, 3.0/3.0, 1.0/2.0)), # front',
+            '            ([c0, c3, t3, t0], n_left, (1.0/3.0, 1.0/2.0, 2.0/3.0, 2.0/2.0)), # left',
+            '            ([c2, c1, t1, t2], n_right, (2.0/3.0, 1.0/2.0, 3.0/3.0, 2.0/2.0)), # right',
             '        ]',
             '        for c_corners, c_norm, c_uv in c_box_faces:',
-            '            add_box_face_grid(pts, normals, counts, indices, uvs, cols, c_corners, c_norm, p_col, nx=4, ny=4, uv_rect=c_uv)',
+            '            add_box_face_grid(pts, normals, counts, indices, uvs, cols, c_corners, c_norm, p_col, nx=4, ny=4)',
             '        nrm_interp = UsdGeom.Tokens.vertex',
             '',
             '    p_mesh.CreatePointsAttr(Vt.Vec3fArray(pts))',
@@ -2237,6 +2319,8 @@ def build_usd_room_architecture(
             '    p_pv_api = UsdGeom.PrimvarsAPI(p_prim)',
             '    p_st_pv = p_pv_api.CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.faceVarying)',
             '    p_st_pv.Set(Vt.Vec2fArray(uvs))',
+            '    p_uv_pv = p_pv_api.CreatePrimvar("uv", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.faceVarying)',
+            '    p_uv_pv.Set(Vt.Vec2fArray(uvs))',
             '    p_prim.CreateAttribute("primvars:karma:object:dicing:quality", Sdf.ValueTypeNames.Float, False).Set(0.0)',
             '    p_prim.CreateAttribute("primvars:arnold:subdiv_type", Sdf.ValueTypeNames.String, False).Set("none")',
             '    p_prim.CreateAttribute("primvars:arnold:subdiv_iterations", Sdf.ValueTypeNames.Int, False).Set(0)',
@@ -2244,136 +2328,16 @@ def build_usd_room_architecture(
             '    p_prim.CreateAttribute("arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
             '    p_prim.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set("*")',
             '    p_prim.CreateAttribute("primvars:karma:object:lightsource:doublesided", Sdf.ValueTypeNames.Int, False).Set(1)',
-            '',
-            '    # Dedicated Prop Material with authentic splat albedo (isolated from room_mat)',
-            '    p_mat_path = Sdf.Path(f"/stage/room/props/{p_name}_mat")',
-            '    p_mat = UsdShade.Material.Define(stage, p_mat_path)',
-            '    p_pbr = UsdShade.Shader.Define(stage, p_mat_path.AppendChild("PBRShader"))',
-            '    p_pbr.CreateIdAttr("UsdPreviewSurface")',
-            '    p_pbr_out = p_pbr.CreateOutput("surface", Sdf.ValueTypeNames.Token)',
-            '    p_pbr.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.60)',
-            '    p_pbr.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.5)',
-            '    p_pbr.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)',
-            '    p_pvr_col = UsdShade.Shader.Define(stage, p_mat_path.AppendChild("PrimvarReader_displayColor"))',
-            '    p_pvr_col.CreateIdAttr("UsdPrimvarReader_float3")',
-            '    p_pvr_col.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("displayColor")',
-            '    p_pvr_col.CreateOutput("result", Sdf.ValueTypeNames.Color3f)',
-            '    if mat_mode == "emissive":',
-            '        p_pbr.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.0, 0.0, 0.0))',
-            '        p_pbr.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(p_pvr_col.ConnectableAPI(), "result")',
-            '    else:',
-            '        p_pbr.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(p_pvr_col.ConnectableAPI(), "result")',
-            '',
-            '    cand_p_tex = ""',
-            '    for cdir in ["hdri_match/props_baked", "scenes/hdri_match/props_baked", "E:/PROJECTS/HDRI_MATCH_SOLARIS/hdri_match/props_baked"]:',
-            '        cf = os.path.join(cdir, f"{p_name}_splat_baked_albedo.exr").replace(chr(92), "/")',
-            '        if os.path.isfile(cf):',
-            '            cand_p_tex = cf',
-            '            break',
-            '    if cand_p_tex and os.path.isfile(cand_p_tex):',
-            '        p_tex = UsdShade.Shader.Define(stage, p_mat_path.AppendChild("TextureSampler"))',
-            '        p_tex.CreateIdAttr("UsdUVTexture")',
-            '        p_tex.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(Sdf.AssetPath(cand_p_tex))',
-            '        p_tex.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("raw")',
-            '        p_pvr_st = UsdShade.Shader.Define(stage, p_mat_path.AppendChild("PrimvarReader_st"))',
-            '        p_pvr_st.CreateIdAttr("UsdPrimvarReader_float2")',
-            '        p_pvr_st.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("st")',
-            '        p_pvr_st.CreateOutput("result", Sdf.ValueTypeNames.Float2)',
-            '        p_tex.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(p_pvr_st.ConnectableAPI(), "result")',
-            '        p_tex.CreateOutput("rgb", Sdf.ValueTypeNames.Color3f)',
-            '        if mat_mode == "emissive":',
-            '            p_pbr.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(p_tex.ConnectableAPI(), "rgb")',
-            '        else:',
-            '            p_pbr.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(p_tex.ConnectableAPI(), "rgb")',
-            '',
-            '    p_mat.CreateSurfaceOutput().ConnectToSource(p_pbr_out)',
-            '    p_mat.CreateSurfaceOutput("karma").ConnectToSource(p_pbr_out)',
-            '    p_mat.CreateSurfaceOutput("arnold").ConnectToSource(p_pbr_out)',
-            '    p_mat.CreateSurfaceOutput("redshift").ConnectToSource(p_pbr_out)',
-            '    UsdShade.MaterialBindingAPI(p_mesh).Bind(p_mat)',
+            '    if mat_mode in ("emissive", "pbr_emissive"):',
+            '        p_prim.CreateAttribute("primvars:karma:object:treat_as_lightsource", Sdf.ValueTypeNames.Int, False).Set(1)',
+            '        p_prim.CreateAttribute("primvars:arnold:mesh_light", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        p_prim.CreateAttribute("primvars:redshift:object:MESHFLAG_GICASTER", Sdf.ValueTypeNames.Bool, False).Set(True)',
             '',
         ])
 
-    # 5. Material Binding & Texture Projection (Native Multi-Renderer & Planar Textures)
+    # 5. Render Visibility and Primvars for Architecture
     py_lines.extend([
-        '# --- 5. Native Multi-Renderer Material(s) for Room Architecture ---',
-        'mats_scope = UsdGeom.Scope.Define(stage, "/stage/room/mats")',
-        '',
-    ])
-    if _rmat is not None:
-        py_lines.extend(_rmat.gen_create_material_function())
-        py_lines.append('create_room_shader = create_native_material')
-    else:
-        # Fallback UsdPreviewSurface if renderer_materials is unavailable
-        py_lines.extend([
-            'def create_room_shader(stage, mat_path, tex_file_path, roughness_val=0.85, mat_mode_val="pbr", emissive_mult_val=1.0, st_varname="st", renderer_target="all"):',
-            '    if "all" in str(renderer_target).lower():',
-            '        roughness_val = 1.0',
-            '    mat = UsdShade.Material.Define(stage, mat_path)',
-            '    pbr = UsdShade.Shader.Define(stage, mat_path.AppendChild("PBRShader"))',
-            '    pbr.CreateIdAttr("UsdPreviewSurface")',
-            '    pbr_out = pbr.CreateOutput("surface", Sdf.ValueTypeNames.Token)',
-            '    if mat_mode_val == "emissive":',
-            '        pbr.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.0, 0.0, 0.0))',
-            '        pbr.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)',
-            '        pbr.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.0)',
-            '        pbr.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)',
-            '        pbr.CreateInput("specularColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.0, 0.0, 0.0))',
-            '    elif mat_mode_val == "pbr_emissive":',
-            '        pbr.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(roughness_val)',
-            '        pbr.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.5)',
-            '        pbr.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)',
-            '    else:',
-            '        pbr.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.0, 0.0, 0.0))',
-            '        pbr.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(roughness_val)',
-            '        pbr.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.5)',
-            '        pbr.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)',
-            '',
-            '    if project_hdri and tex_file_path and os.path.isfile(tex_file_path):',
-            '        tex = UsdShade.Shader.Define(stage, mat_path.AppendChild("TextureSampler"))',
-            '        tex.CreateIdAttr("UsdUVTexture")',
-            '        tex.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(Sdf.AssetPath(tex_file_path))',
-            '        tex.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("raw")',
-            '        tex.CreateInput("wrapS", Sdf.ValueTypeNames.Token).Set("repeat")',
-            '        tex.CreateInput("wrapT", Sdf.ValueTypeNames.Token).Set("clamp")',
-            '        pvr_st = UsdShade.Shader.Define(stage, mat_path.AppendChild("PrimvarReader_st"))',
-            '        pvr_st.CreateIdAttr("UsdPrimvarReader_float2")',
-            '        pvr_st.CreateInput("varname", Sdf.ValueTypeNames.Token).Set(st_varname)',
-            '        pvr_st.CreateOutput("result", Sdf.ValueTypeNames.Float2)',
-            '        tex.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(pvr_st.ConnectableAPI(), "result")',
-            '        tex.CreateOutput("rgb", Sdf.ValueTypeNames.Color3f)',
-            '        if mat_mode_val == "emissive":',
-            '            tex.CreateInput("scale", Sdf.ValueTypeNames.Color4f).Set(Gf.Vec4f(emissive_mult_val, emissive_mult_val, emissive_mult_val, 1.0))',
-            '            pbr.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(tex.ConnectableAPI(), "rgb")',
-            '        elif mat_mode_val == "pbr_emissive":',
-            '            pbr.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(tex.ConnectableAPI(), "rgb")',
-            '            tex.CreateInput("scale", Sdf.ValueTypeNames.Color4f).Set(Gf.Vec4f(emissive_mult_val, emissive_mult_val, emissive_mult_val, 1.0))',
-            '            pbr.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(tex.ConnectableAPI(), "rgb")',
-            '        else:',
-            '            pbr.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(tex.ConnectableAPI(), "rgb")',
-            '    else:',
-            '        if mat_mode_val == "emissive":',
-            '            pbr.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(emissive_mult_val, emissive_mult_val, emissive_mult_val))',
-            '        elif mat_mode_val == "pbr_emissive":',
-            '            pbr.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.65, 0.65, 0.65))',
-            '            pbr.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(emissive_mult_val, emissive_mult_val, emissive_mult_val))',
-            '        else:',
-            '            pbr.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.65, 0.65, 0.65))',
-            '',
-            '    mat.CreateSurfaceOutput().ConnectToSource(pbr_out)',
-            '    mat.CreateSurfaceOutput("karma").ConnectToSource(pbr_out)',
-            '    mat.CreateSurfaceOutput("arnold").ConnectToSource(pbr_out)',
-            '    mat.CreateSurfaceOutput("redshift").ConnectToSource(pbr_out)',
-            '    return mat',
-        ])
-
-    py_lines.extend([
-        '',
-        '# Default room_mat for scope fallback',
-        'default_mat = create_room_shader(stage, Sdf.Path("/stage/room/room_mat"), tex_file, roughness, mat_mode, emissive_mult, "st", renderer_target)',
-        'UsdShade.MaterialBindingAPI(room_scope.GetPrim()).Bind(default_mat)',
-        '',
-        '# Surface-specific material binding for planar textures',
+        '# Surface-specific render visibility and lightsource primvars',
         'mesh_to_key = {',
         '    "floor": "floor",',
         '    "ceiling": "ceiling",',
@@ -2385,26 +2349,14 @@ def build_usd_room_architecture(
         'for mesh_rel_path, surf_key in mesh_to_key.items():',
         '    p_mesh = stage.GetPrimAtPath(f"/stage/room/{mesh_rel_path}")',
         '    if p_mesh and p_mesh.IsValid():',
-        '        surf_tex = planar_textures.get(surf_key, "") if use_planar else ""',
-        '        if surf_tex and os.path.isfile(surf_tex):',
-        '            safe_name = surf_key.replace("/", "_")',
-        '            s_mat = create_room_shader(stage, Sdf.Path(f"/stage/room/mats/{safe_name}_mat"), surf_tex, roughness, mat_mode, emissive_mult, "st", renderer_target)',
-        '            UsdShade.MaterialBindingAPI(p_mesh).Bind(s_mat)',
-        '        else:',
-        '            UsdShade.MaterialBindingAPI(p_mesh).Bind(default_mat)',
-        '        if not room_shadows:',
-        '            p_mesh.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set("* ^shadow")',
-        '            p_mesh.CreateAttribute("primvars:arnold:visibility:shadow", Sdf.ValueTypeNames.Bool, False).Set(False)',
-        '            p_mesh.CreateAttribute("arnold:visibility:shadow", Sdf.ValueTypeNames.Int, False).Set(0)',
-        '            p_mesh.CreateAttribute("primvars:arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(False)',
-        '            p_mesh.CreateAttribute("arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(False)',
-        '            p_mesh.CreateAttribute("primvars:redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(False)',
-        '            p_mesh.CreateAttribute("redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(False)',
-        '        else:',
-        '            p_mesh.CreateAttribute("primvars:arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
-        '            p_mesh.CreateAttribute("arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
+        '        p_mesh.CreateAttribute("primvars:arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
+        '        p_mesh.CreateAttribute("arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
+        '        p_mesh.CreateAttribute("primvars:arnold:visibility:shadow", Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))',
+        '        p_mesh.CreateAttribute("arnold:visibility:shadow", Sdf.ValueTypeNames.Int, False).Set(1 if room_shadows else 0)',
+        '        p_mesh.CreateAttribute("primvars:redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))',
+        '        p_mesh.CreateAttribute("redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(bool(room_shadows))',
         '        if room_invisible:',
-        '            karma_vis = "* ^primary ^shadow" if not room_shadows else "* ^primary"',
+        '            karma_vis = "diffuse reflect refract" if not room_shadows else "diffuse reflect refract shadow"',
         '            p_mesh.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set(karma_vis)',
         '            p_mesh.CreateAttribute("primvars:arnold:visibility:camera", Sdf.ValueTypeNames.Bool, False).Set(False)',
         '            p_mesh.CreateAttribute("arnold:visibility:camera", Sdf.ValueTypeNames.Int, False).Set(0)',
@@ -2413,7 +2365,7 @@ def build_usd_room_architecture(
         '            p_mesh.CreateAttribute("primvars:redshift:object:MESHFLAG_PRIMARYRAYVIS", Sdf.ValueTypeNames.Bool, False).Set(False)',
         '            p_mesh.CreateAttribute("redshift:object:MESHFLAG_PRIMARYRAYVIS", Sdf.ValueTypeNames.Bool, False).Set(False)',
         '        else:',
-        '            karma_vis = "* ^shadow" if not room_shadows else "*"',
+        '            karma_vis = "primary diffuse reflect refract" if not room_shadows else "*"',
         '            p_mesh.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set(karma_vis)',
         '            p_mesh.CreateAttribute("primvars:arnold:visibility:camera", Sdf.ValueTypeNames.Bool, False).Set(True)',
         '            p_mesh.CreateAttribute("arnold:visibility:camera", Sdf.ValueTypeNames.Int, False).Set(1)',
@@ -2441,6 +2393,25 @@ def build_usd_room_architecture(
     room_node.parm("python").set(full_code)
     room_node.bypass(False)
     room_node.cook(force=True)
+
+    # 6. Author native multi-renderer shaders in a Houdini Material Library LOP (the same way DomeBreaker does)
+    try:
+        from hdri_match_solaris import renderer_materials
+        p_mat_config = {
+            "renderer_target": renderer_target or "all",
+            "mat_mode": mat_mode or "pbr",
+            "emissive_mult": emissive_mult,
+            "ground_roughness": roughness,
+            "proj_mode": "room_box",
+            "planar_textures": planar_textures_dict if use_planar_textures else {},
+            "hdri_texture": hdri_texture or "",
+            "mat_lib_node_name": "splatforge_materials",
+        }
+        mat_lib_node = renderer_materials.create_or_update_material_library(stage_node, p_mat_config)
+        if mat_lib_node:
+            mat_lib_node.cook(force=True)
+    except Exception as ex_mat:
+        print(f"[SplatForge] Material library creation error: {ex_mat}")
 
     # Lookdev rig reference if present
     lookdev = stage_node.node("hdri_match_lookdev")
@@ -2485,26 +2456,24 @@ def build_usd_room_architecture(
 
 def clear_usd_room_architecture(stage_node):
     """
-    Remove the splat room architecture node and physical portal lights from /stage and rewire stream cleanly.
+    Remove the splat room architecture node, splatforge materials, and physical portal lights from /stage and rewire stream cleanly.
     """
     if not stage_node or not hou:
         return False
 
     clear_portal_lights(stage_node)
 
-    room_node = stage_node.node("splat_room_architecture")
-    if not room_node:
-        return False
+    for nname in ("splat_room_architecture", "splatforge_materials"):
+        node = stage_node.node(nname)
+        if node:
+            inputs = node.inputs()
+            outputs = node.outputs()
+            if inputs and outputs:
+                for out_n in outputs:
+                    out_n.setInput(0, inputs[0])
+            node.destroy()
 
-    inputs = room_node.inputs()
-    outputs = room_node.outputs()
-
-    # Rewire upstream directly to downstream
-    if inputs and outputs:
-        for out_n in outputs:
-            out_n.setInput(0, inputs[0])
-
-    room_node.destroy()
+    wire_solaris_stage_stream(stage_node)
     stage_node.layoutChildren()
     return True
 

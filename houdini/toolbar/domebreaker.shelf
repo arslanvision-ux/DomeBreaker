@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <shelfDocument>
+  <!-- This file contains definitions of shelves, toolbars, and tools.
+ It should not be hand-edited when it is being used by the application.
+ Note, that two definitions of the same element are not allowed in
+ a single file. -->
+
   <toolshelf name="domebreaker" label="DomeBreaker">
     <memberTool name="domebreaker_open_panel"/>
     <memberTool name="domebreaker_reload_tool"/>
+    <memberTool name="splatforge_open_panel"/>
   </toolshelf>
 
   <tool name="domebreaker_open_panel" label="DomeBreaker" icon="LOP_light">
@@ -76,6 +82,66 @@ else:
 ]]></script>
   </tool>
 
+  <tool name="splatforge_open_panel" label="SPLATFORGE" icon="SOP_attribreorient">
+    <helpText><![CDATA[
+Open the standalone SPLATFORGE panel for Gaussian Splat environment reconstruction.
+]]></helpText>
+    <script scriptType="python"><![CDATA[
+import sys
+import hou
+
+target_interfaces = ["splatforge_panel", "domebreaker_panel"]
+interface_name = None
+for iface in target_interfaces:
+    if iface in hou.pypanel.interfaces():
+        interface_name = iface
+        break
+
+if not interface_name:
+    hou.ui.displayMessage(
+        "SPLATFORGE panel interface not found.\nPlease restart Houdini to register the package.", 
+        severity=hou.severityType.Error
+    )
+else:
+    interface = hou.pypanel.interfaces()[interface_name]
+    desk = hou.ui.curDesktop()
+    found_pane = None
+
+    for pane in desk.paneTabs():
+        if pane.type() == hou.paneTabType.PythonPanel:
+            act = pane.activeInterface()
+            if act and act.name() in target_interfaces:
+                found_pane = pane
+                break
+
+    if not found_pane:
+        for fp in desk.floatingPanels():
+            for p in fp.panes():
+                for tab in p.tabs():
+                    if tab.type() == hou.paneTabType.PythonPanel:
+                        act = tab.activeInterface()
+                        if act and act.name() in target_interfaces:
+                            found_pane = tab
+                            break
+                if found_pane:
+                    break
+            if found_pane:
+                break
+
+    if found_pane:
+        found_pane.setIsCurrentTab()
+        try:
+            fp = found_pane.pane().floatingPanel()
+            if fp:
+                fp.activate()
+        except Exception:
+            pass
+    else:
+        panel_pane = desk.createFloatingPaneTab(hou.paneTabType.PythonPanel, position=(420, 220), size=(440, 820))
+        panel_pane.setActiveInterface(interface)
+]]></script>
+  </tool>
+
   <tool name="domebreaker_reload_tool" label="Reload DomeBreaker" icon="BUTTONS_reload">
     <helpText><![CDATA[
 Reload all DomeBreaker & HDRI modules and refresh the open panel.
@@ -92,8 +158,20 @@ modules = [
     "hdri_match_solaris.light_extractor",
     "hdri_match_solaris.gaussian_splat",
     "hdri_match_solaris.lop_splat",
+    "hdri_match_solaris.lop_custom_props",
     "hdri_match_solaris.renderer_materials",
     "hdri_match_solaris.hdri_room_analyzer",
+    "hdri_match_solaris.splatforge.config",
+    "hdri_match_solaris.splatforge.io.cache_manager",
+    "hdri_match_solaris.splatforge.io.splat_loader",
+    "hdri_match_solaris.splatforge.analysis.scene_analyzer",
+    "hdri_match_solaris.splatforge.analysis.room_detector",
+    "hdri_match_solaris.splatforge.analysis.light_analyzer",
+    "hdri_match_solaris.splatforge.lighting.hdri_generator",
+    "hdri_match_solaris.splatforge.lighting.light_extractor",
+    "hdri_match_solaris.splatforge.reconstruction.room_reconstructor",
+    "hdri_match_solaris.splatforge.ui.splatforge_tab",
+    "hdri_match_solaris.splatforge",
     "hdri_match_solaris.panel_ui",
     "hdri_match_solaris",
     "domebreaker",
@@ -114,7 +192,7 @@ for m in modules:
         except Exception:
             pass
 
-target_interfaces = ["domebreaker_panel", "hdri_match_panel"]
+target_interfaces = ["domebreaker_panel", "hdri_match_panel", "splatforge_panel"]
 desk = hou.ui.curDesktop()
 all_panes = [p for p in desk.paneTabs() if p.type() == hou.paneTabType.PythonPanel]
 for fp in desk.floatingPanels():
@@ -127,13 +205,10 @@ for pane in all_panes:
     act = pane.activeInterface()
     if act and act.name() in target_interfaces:
         iface_name = act.name()
-        other_ifaces = [i for i in hou.pypanel.interfaces().keys() if i != iface_name]
-        if other_ifaces:
-            try:
-                pane.setActiveInterface(hou.pypanel.interfaces()[other_ifaces[0]])
-            except Exception:
-                pass
-        pane.setActiveInterface(hou.pypanel.interfaces()[iface_name])
+        try:
+            pane.setActiveInterface(hou.pypanel.interfaces()[iface_name])
+        except Exception:
+            pass
 
 hou.ui.setStatusMessage(f"DomeBreaker: reloaded {len(reloaded)} modules and rebuilt panel.", severity=hou.severityType.Message)
 print(f"[DomeBreaker] Reloaded: {', '.join(reloaded)}")

@@ -1,8 +1,8 @@
-﻿"""
+"""
 DomeBreaker - Solaris USD Lighting & Environment Dissector.
 
-Native Houdini 20.0, 20.5, 21.0+ integration for physical HDRI calibration,
-sun extraction, multi-light inpainting, ground projection parallax, and lookdev verification.
+Native Houdini 21+ integration for physical HDRI calibration, sun extraction,
+multi-light inpainting, ground projection parallax, and lookdev verification.
 """
 
 from hdri_match_solaris import *
@@ -12,10 +12,9 @@ from hdri_match_solaris.panel_ui import (
     createInterface,
 )
 
-__version__ = "1.0.0-beta.1"
+__version__ = "2.0.0"
 __all__ = [
     "HdriMatchSolarisPanel",
     "DomeBreakerPanel",
     "createInterface",
 ]
-

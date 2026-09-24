@@ -6,7 +6,7 @@
 set -e
 
 echo "================================================================="
-echo "   [+] DomeBreaker - Command-Line Auto-Updater (Linux)"
+echo "   ⚡ DomeBreaker - Command-Line Auto-Updater (Linux)"
 echo "================================================================="
 echo ""
 

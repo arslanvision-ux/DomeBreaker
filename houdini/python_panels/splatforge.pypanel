@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pythonPanelDocument>
+  <interface name="splatforge_panel" label="SPLATFORGE"
+             icon="SOP_attribreorient" help_url="">
+    <script><![CDATA[
+def _build_panel():
+    try:
+        import hou
+        def _get_stage():
+            stage = hou.node("/stage")
+            if stage is None:
+                stage = hou.node("/obj").createNode("lopnet", "stage")
+            return stage
+
+        from hdri_match_solaris.splatforge.ui.splatforge_tab import SplatForgeTab
+        return SplatForgeTab(stage_node_getter=_get_stage)
+    except Exception as e:
+        import traceback
+        try:
+            from PySide6 import QtWidgets
+        except ImportError:
+            from PySide2 import QtWidgets
+        err_box = QtWidgets.QTextEdit()
+        err_box.setReadOnly(True)
+        err_box.setStyleSheet("background-color: #2b0000; color: #ff7777; font-family: monospace; font-size: 13px;")
+        err_box.setText("SPLATFORGE Panel Load Error:\n\n" + traceback.format_exc())
+        return err_box
+
+def onCreateInterface():
+    return _build_panel()
+
+def createInterface():
+    return _build_panel()
+]]></script>
+    <includeInToolbarMenu menu_position="805" create_separator="false"/>
+    <help><![CDATA[
+SPLATFORGE
+
+Convert Gaussian Splats into reconstructed room geometry, props, textures, and USD lighting in Solaris.
+]]></help>
+  </interface>
+</pythonPanelDocument>

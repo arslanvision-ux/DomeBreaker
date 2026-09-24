@@ -33,7 +33,15 @@ tests/galleries/
 *.bgeo
 *.bgeo.sc
 *.usd[abc]
+*.ply
+*.npz
 !test_env.exr
+
+# Local working scenes & splat caches
+SPLATS/
+scenes/
+tests/
+render/
 
 # OS generated files
 .DS_Store

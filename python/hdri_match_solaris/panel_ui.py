@@ -1101,13 +1101,21 @@ class HDRILargePreviewDialog(QtWidgets.QDialog):
             shape_str = f"{orig_shape[0]}x{orig_shape[1]}" if orig_shape else ""
             info_text = f"HDRI Map: {name} ({shape_str}) | Inspector EV: {'+' if self.ev_offset>=0 else ''}{self.ev_offset:.1f}"
         elif self.current_mode == "plate":
-            target_arr = getattr(self.panel, '_plate_thumb_raw', None)
+            target_arr = getattr(self.panel, '_plate_full_array', None)
+            if target_arr is None:
+                target_arr = getattr(self.panel, '_plate_thumb_raw', None)
+            orig_shape = getattr(self.panel, '_plate_orig_shape', None)
             path = self.panel.txt_plate.text() if hasattr(self.panel, 'txt_plate') else ""
             name = os.path.basename(path) if path else "No Plate"
-            info_text = f"Target Plate: {name} | Inspector EV: {'+' if self.ev_offset>=0 else ''}{self.ev_offset:.1f}"
+            shape_str = f"{orig_shape[0]}x{orig_shape[1]}" if orig_shape else ""
+            info_text = f"Target Plate: {name} ({shape_str}) | Inspector EV: {'+' if self.ev_offset>=0 else ''}{self.ev_offset:.1f}"
         elif self.current_mode == "wipe":
-            h_raw = getattr(self.panel, '_hdri_thumb_raw', None)
-            p_raw = getattr(self.panel, '_plate_thumb_raw', None)
+            h_raw = getattr(self.panel, '_hdri_full_array', None)
+            if h_raw is None:
+                h_raw = getattr(self.panel, '_hdri_thumb_raw', None)
+            p_raw = getattr(self.panel, '_plate_full_array', None)
+            if p_raw is None:
+                p_raw = getattr(self.panel, '_plate_thumb_raw', None)
             ratio = self.panel.sld_wipe.value() / 100.0 if hasattr(self.panel, 'sld_wipe') else 0.5
             info_text = f"Interactive Split Wipe Comparison ({int(ratio*100)}% HDRI | {int((1.0-ratio)*100)}% Plate)"
 
@@ -1120,19 +1128,29 @@ class HDRILargePreviewDialog(QtWidgets.QDialog):
                 h_u8 = self.panel._tonemap_array(h_img, apply_calib=True) if h_img is not None else None
                 p_u8 = self.panel._tonemap_array(p_img, apply_calib=False) if p_img is not None else None
 
-                tw, th = 960, 480
-                canvas = np.zeros((th, tw, 3), dtype=np.uint8)
+                pix_h = self.panel._arr_to_pixmap(h_u8) if h_u8 is not None else None
+                pix_p = self.panel._arr_to_pixmap(p_u8) if p_u8 is not None else None
+
+                tw, th = 1920, 1080
+                canvas = QtGui.QPixmap(tw, th)
+                canvas.fill(QtCore.Qt.black)
+                painter = QtGui.QPainter(canvas)
                 split_x = int(ratio * tw)
-                if h_u8 is not None:
-                    h_resized = np.array(QtGui.QImage(self.panel._arr_to_pixmap(h_u8).toImage()).scaled(tw, th).bits()).reshape((th, tw, 4))[:, :, :3]
-                    canvas[:, :split_x] = h_resized[:, :split_x]
-                if p_u8 is not None:
-                    p_resized = np.array(QtGui.QImage(self.panel._arr_to_pixmap(p_u8).toImage()).scaled(tw, th).bits()).reshape((th, tw, 4))[:, :, :3]
-                    canvas[:, split_x:] = p_resized[:, split_x:]
-                # Split divider line
+
+                if pix_h is not None:
+                    h_scaled = pix_h.scaled(tw, th, QtCore.Qt.IgnoreAspectRatio, QtCore.Qt.SmoothTransformation)
+                    painter.drawPixmap(0, 0, split_x, th, h_scaled, 0, 0, split_x, th)
+                if pix_p is not None:
+                    p_scaled = pix_p.scaled(tw, th, QtCore.Qt.IgnoreAspectRatio, QtCore.Qt.SmoothTransformation)
+                    painter.drawPixmap(split_x, 0, tw - split_x, th, p_scaled, split_x, 0, tw - split_x, th)
+
+                # Amber divider line
                 if 0 <= split_x < tw:
-                    canvas[:, max(0, split_x - 1):min(tw, split_x + 2)] = [230, 126, 34]
-                self._cached_pixmap = self.panel._arr_to_pixmap(canvas)
+                    painter.setPen(QtGui.QPen(QtGui.QColor(230, 126, 34), 2))
+                    painter.drawLine(split_x, 0, split_x, th)
+
+                painter.end()
+                self._cached_pixmap = canvas
                 self.lbl_info.setText(info_text)
                 self._display_pixmap()
                 return
@@ -1168,13 +1186,16 @@ class HDRILargePreviewDialog(QtWidgets.QDialog):
         if not self._cached_pixmap:
             return
         if self.btn_fit.isChecked():
+            self.scroll_area.setWidgetResizable(True)
             view_size = self.scroll_area.viewport().size()
             scaled = self._cached_pixmap.scaled(
                 view_size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
             )
             self.lbl_image.setPixmap(scaled)
         else:
+            self.scroll_area.setWidgetResizable(False)
             self.lbl_image.setPixmap(self._cached_pixmap)
+            self.lbl_image.resize(self._cached_pixmap.size())
 
 
 class HDRIBoundaryLargeViewDialog(QtWidgets.QDialog):
@@ -1523,8 +1544,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._hdri_thumb_raw = None
         self._debug_win = HDRIDebugWindow(self)
         self._plate_thumb_raw = None
+        self._plate_orig_thumb = None
+        self._plate_full_array = None
+        self._plate_orig_full = None
+        self._plate_orig_shape = None
         self._hdri_orig_shape = None
         self._hdri_full_array = None
+        self._hdri_orig_full = None
         self._current_calibrated_path = None
         self._baked_manual = False
         self._baked_ev = 0.0
@@ -1778,7 +1804,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         scroll_dome.setWidget(scroll_dome_widget)
         self.tabs_main.addTab(scroll_dome, "⚡ DomeBreaker")
 
-        # ---- Tab 2: 3D Gaussian Splatting ----
+        # ---- Tab 2: SplatForge (3DGS Environment & Room Reconstructor) ----
         scroll_splat = QtWidgets.QScrollArea()
         scroll_splat.setWidgetResizable(True)
         scroll_splat_widget = QtWidgets.QWidget()
@@ -1795,7 +1821,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         self._scroll_layout_splat.addStretch()
         scroll_splat.setWidget(scroll_splat_widget)
-        self.tabs_main.addTab(scroll_splat, "🔮 3D Gaussian Splatting")
+        self.tabs_main.addTab(scroll_splat, "🔨 SplatForge")
 
         # ---- Tab 3: HDRI Room Analyzer ----
         scroll_analyzer = QtWidgets.QScrollArea()
@@ -1889,8 +1915,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._scroll_layout.addWidget(sec)
 
     def _build_gaussian_splat_unified_section(self):
-        """Unified 3D Gaussian Splatting (3DGS) master section containing shared file input and 3 workflow tabs."""
-        sec = CollapsibleSection("3D Gaussian Splatting (3DGS)", collapsed=False)
+        """Unified SplatForge master section containing shared file input and workflow tabs."""
+        sec = CollapsibleSection("SplatForge — 3DGS Scene & Room Reconstructor", collapsed=False)
         self.grp_splat = sec
         self.grp_splat_lights = sec
         self.grp_splat_arch = sec
@@ -1980,13 +2006,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._populate_splat_dome_tab(lay_dome)
         self.tabs_splat.addTab(tab_dome, "🌐 360° HDRI Dome")
 
-        # Tab 2: 3D Lights & Cloud
-        tab_lights = QtWidgets.QWidget()
-        lay_lights = QtWidgets.QFormLayout(tab_lights)
+        # Tab 2: 3D Lights & Cloud (hidden per user request; initialized headless so attributes remain valid)
+        self._tab_lights = QtWidgets.QWidget()
+        lay_lights = QtWidgets.QFormLayout(self._tab_lights)
         lay_lights.setContentsMargins(6, 8, 6, 6)
         lay_lights.setSpacing(6)
         self._populate_splat_lights_tab(lay_lights)
-        self.tabs_splat.addTab(tab_lights, "💡 3D Lights & Cloud")
+        # self.tabs_splat.addTab(self._tab_lights, "💡 3D Lights & Cloud")
 
         # Tab 3: Room Architecture (USD)
         tab_arch = QtWidgets.QWidget()
@@ -2004,13 +2030,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._populate_splat_custom_props_tab(lay_props)
         self.tabs_splat.addTab(tab_props, "🪑 Custom Props & Projection")
 
-        # Tab 5: USD Points & Geometry
-        tab_points = QtWidgets.QWidget()
-        lay_points = QtWidgets.QVBoxLayout(tab_points)
+        # Tab 5: USD Points & Geometry (hidden per user request; initialized headless so attributes remain valid)
+        self._tab_points = QtWidgets.QWidget()
+        lay_points = QtWidgets.QVBoxLayout(self._tab_points)
         lay_points.setContentsMargins(6, 8, 6, 6)
         lay_points.setSpacing(6)
         self._populate_splat_points_tab(lay_points)
-        self.tabs_splat.addTab(tab_points, "☁️ USD Points & Geometry")
+        # self.tabs_splat.addTab(self._tab_points, "☁️ USD Points & Geometry")
 
         main_lay.addWidget(self.tabs_splat)
         self._scroll_layout.addWidget(sec)
@@ -2084,7 +2110,28 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.chk_splat_inpaint_poles.setToolTip("Automatically inpaint and diffuse boundary colors into the zenith (top) and nadir (bottom) to eliminate black poles.")
         lay.addRow("Polar Infill:", self.chk_splat_inpaint_poles)
 
-        # Action buttons for HDRI Baking
+        # Action buttons for HDRI Baking and Viewport Splat Cloud Display
+        cloud_btns_row = QtWidgets.QHBoxLayout()
+        self.btn_vis_splat_scene = QtWidgets.QPushButton("👁️ Show Splat Cloud")
+        self.btn_vis_splat_scene.setStyleSheet(
+            "QPushButton { background-color: #2980b9; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #3498db; }"
+        )
+        self.btn_vis_splat_scene.setToolTip("Toggle or load the 3D Gaussian Splat scene point cloud into Solaris /stage so you can see the room, walls, and probe position in real-time.")
+        self.btn_vis_splat_scene.clicked.connect(self._toggle_splat_scene_vis)
+
+        self.btn_display_bakegs = QtWidgets.QPushButton("🔮 Display Native Splats (BakeGS)")
+        self.btn_display_bakegs.setStyleSheet(
+            "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #9b59b6; }"
+        )
+        self.btn_display_bakegs.setToolTip("Display Gaussian Splats using Houdini's native Bake GSplats reader (bakegsplat SOP). Encodes native GS_Alpha, scale, orient, and spherical harmonics for real-time viewport display and Karma XPU rendering.")
+        self.btn_display_bakegs.clicked.connect(self._display_splats_bakegs_clicked)
+
+        cloud_btns_row.addWidget(self.btn_vis_splat_scene)
+        cloud_btns_row.addWidget(self.btn_display_bakegs)
+        lay.addRow("Viewport Splats:", cloud_btns_row)
+
         actions_row = QtWidgets.QHBoxLayout()
         self.btn_bake_splat = QtWidgets.QPushButton("🌐 Bake 360° HDRI from Splat")
         self.btn_bake_splat.setStyleSheet(
@@ -2125,14 +2172,6 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         """Populate Tab 2: 3D Lights extraction and Viewport Point Cloud."""
         # Quick Action buttons right at the top of section
         lt_actions_row = QtWidgets.QHBoxLayout()
-        self.btn_vis_splat_scene = QtWidgets.QPushButton("👁️ Toggle Splat Cloud")
-        self.btn_vis_splat_scene.setStyleSheet(
-            "QPushButton { background-color: #2980b9; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
-            "QPushButton:hover { background-color: #3498db; }"
-        )
-        self.btn_vis_splat_scene.setToolTip("Toggle or load the 3D Gaussian Splat scene point cloud into Solaris /stage so you can see the room, walls, windows, and light positions in real-time.")
-        self.btn_vis_splat_scene.clicked.connect(self._toggle_splat_scene_vis)
-
         self.btn_bake_splat_usd = QtWidgets.QPushButton("📦 Bake USD Cloud")
         self.btn_bake_splat_usd.setStyleSheet(
             "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
@@ -2157,7 +2196,6 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_clear_splat_lights.setToolTip("Remove all generated splat 3D lights and debug visualization from /stage.")
         self.btn_clear_splat_lights.clicked.connect(self._clear_splat_lights_clicked)
 
-        lt_actions_row.addWidget(self.btn_vis_splat_scene)
         lt_actions_row.addWidget(self.btn_bake_splat_usd)
         lt_actions_row.addWidget(self.btn_extract_splat_lights)
         lt_actions_row.addWidget(self.btn_clear_splat_lights)
@@ -2463,8 +2501,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.chk_arch_double_sided.setToolTip("When checked (default), walls are visible and shaded from both outside and inside, preventing black backfaces.")
 
         self.chk_arch_shadows = QtWidgets.QCheckBox("Room Casts Shadows")
-        self.chk_arch_shadows.setChecked(False)
-        self.chk_arch_shadows.setToolTip("When unchecked (default), exterior HDRI dome light provides natural ambient fill without pitch-black interior shadows.")
+        self.chk_arch_shadows.setChecked(True)
+        self.chk_arch_shadows.setToolTip("When checked (default), walls and room architecture cast shadows realistically into the scene.")
 
         self.chk_arch_invisible = QtWidgets.QCheckBox("Invisible Room")
         self.chk_arch_invisible.setChecked(False)
@@ -2474,6 +2512,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         opt_row.addWidget(self.chk_arch_shadows)
         opt_row.addWidget(self.chk_arch_invisible)
         lay.addRow("Shading:", opt_row)
+
+        self.chk_arch_double_sided.toggled.connect(self._on_arch_shading_toggled)
+        self.chk_arch_shadows.toggled.connect(self._on_arch_shading_toggled)
+        self.chk_arch_invisible.toggled.connect(self._on_arch_shading_toggled)
 
         self.sld_arch_portal_intensity = SliderDoubleSpinBox(0.01, 10.0, 0.1, 1.0, decimals=2)
         self.sld_arch_portal_intensity.setToolTip("Intensity multiplier for physical window portal rect lights (default 1.0 matches calibrated HDR texture radiance).")
@@ -2492,6 +2534,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "• Full HDRI Map: Assigns the complete equirectangular HDRI map directly to inputs:texture:file.\n"
             "• No Texture: Pure uniform colored area light."
         )
+        self.combo_arch_portal_texture.currentIndexChanged.connect(self._on_portal_texture_mode_changed)
         portal_tex_row.addWidget(self.combo_arch_portal_texture)
         lay.addRow("Portal Texture:", portal_tex_row)
 
@@ -2527,6 +2570,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.sld_splat_lookdev_radius.setToolTip("Radius of the lookdev reference spheres in meters (default 0.15m = 30cm diameter).")
         self.sld_splat_lookdev_height = SliderDoubleSpinBox(0.0, 3.0, 0.1, 1.2, decimals=2)
         self.sld_splat_lookdev_height.setToolTip("Height of the stand mast from floor to sphere mounting bar (default 1.2m chest/eye height).")
+        self.sld_splat_lookdev_radius.valueChanged.connect(self._on_splat_lookdev_param_changed)
+        self.sld_splat_lookdev_height.valueChanged.connect(self._on_splat_lookdev_param_changed)
         ld_row_1.addWidget(QtWidgets.QLabel("Ball Radius (m):"))
         ld_row_1.addWidget(self.sld_splat_lookdev_radius)
         ld_row_1.addWidget(QtWidgets.QLabel("Stand Height (m):"))
@@ -2536,10 +2581,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         ld_row_2 = QtWidgets.QHBoxLayout()
         self.sld_splat_lookdev_scale = SliderDoubleSpinBox(0.2, 10.0, 0.1, 1.0, decimals=2)
         self.sld_splat_lookdev_scale.setToolTip("Global scale multiplier for the entire lookdev verification rig.")
+        self.sld_splat_lookdev_scale.valueChanged.connect(self._on_splat_lookdev_param_changed)
         self.chk_splat_lookdev_macbeth = QtWidgets.QCheckBox("Macbeth Chart")
         self.chk_splat_lookdev_macbeth.setChecked(True)
+        self.chk_splat_lookdev_macbeth.toggled.connect(self._on_splat_lookdev_param_changed)
         self.chk_splat_lookdev_white = QtWidgets.QCheckBox("White Ball")
         self.chk_splat_lookdev_white.setChecked(True)
+        self.chk_splat_lookdev_white.toggled.connect(self._on_splat_lookdev_param_changed)
 
         self.btn_splat_update_lookdev = QtWidgets.QPushButton("🎯 Update Lookdev Rig")
         self.btn_splat_update_lookdev.setStyleSheet(
@@ -2612,21 +2660,52 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_clear_custom_props.setToolTip("Clear all custom props from the list.")
         self.btn_clear_custom_props.clicked.connect(self._on_clear_custom_props_clicked)
 
-        self.btn_populate_splat_props = QtWidgets.QPushButton("🏛️ Populate Splat Props / Columns")
-        self.btn_populate_splat_props.setVisible(False)
-        self.btn_populate_splat_props.setStyleSheet(
-            "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
-            "QPushButton:hover { background-color: #9b59b6; }"
-        )
-        self.btn_populate_splat_props.setToolTip("Populate detected columns, tables, and interior props from the Gaussian Splat scene as proxy objects when no custom models are provided.")
-        self.btn_populate_splat_props.clicked.connect(self._on_populate_splat_props_clicked)
-
         btn_row.addWidget(self.btn_add_custom_prop)
         btn_row.addWidget(self.btn_pick_stage_prop)
-        # Columns and props are automatically created in /stage/room/props during Analyze & Build Room Architecture
         btn_row.addWidget(self.btn_remove_custom_prop)
         btn_row.addWidget(self.btn_clear_custom_props)
         lay.addLayout(btn_row)
+
+        # Splat 3D Mesh Reconstruction Group (Heightfield / OpenVDB)
+        reconstruct_grp = QtWidgets.QGroupBox("⚡ 3D Prop Reconstruction from Gaussian Splats")
+        reconstruct_grp_lay = QtWidgets.QFormLayout(reconstruct_grp)
+        reconstruct_grp_lay.setContentsMargins(6, 6, 6, 6)
+        reconstruct_grp_lay.setSpacing(6)
+
+        rec_opts_row = QtWidgets.QHBoxLayout()
+        self.combo_reconstruct_method = QtWidgets.QComboBox()
+        self.combo_reconstruct_method.addItems([
+            "Auto (Detect Best Method)",
+            "Top-Down Depth Heightfield (Tables / Counters)",
+            "OpenVDB Volumetric Mesh (Trees / Organic / Sculptures)",
+        ])
+        self.combo_reconstruct_method.setToolTip(
+            "• Top-Down Depth Heightfield: Captures horizontal table/counter surfaces and items on them with watertight side walls.\n"
+            "• OpenVDB Volumetric Mesh: Fuses splats into smooth 3D volumetric surfaces for trees, plants, lamps, chairs, and fixtures."
+        )
+
+        self.sld_reconstruct_voxel = SliderDoubleSpinBox(0.01, 0.10, 0.005, 0.035, decimals=3)
+        self.sld_reconstruct_voxel.setToolTip("Sampling resolution / VDB voxel size in meters (0.02 - 0.05m recommended).")
+
+        rec_opts_row.addWidget(self.combo_reconstruct_method, 1)
+        rec_opts_row.addWidget(QtWidgets.QLabel("Voxel/Res (m):"))
+        rec_opts_row.addWidget(self.sld_reconstruct_voxel, 0)
+        reconstruct_grp_lay.addRow("Method & Res:", rec_opts_row)
+
+        rec_actions_row = QtWidgets.QHBoxLayout()
+        self.btn_reconstruct_splat_props = QtWidgets.QPushButton("⚡ Reconstruct 3D Props from Splats")
+        self.btn_reconstruct_splat_props.setStyleSheet(
+            "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 6px 12px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #9b59b6; }"
+        )
+        self.btn_reconstruct_splat_props.setToolTip(
+            "Analyze interior Gaussian Splats, reconstruct them into clean 3D polygonal geometry (saved to scenes/props/*.bgeo.sc) and automatically add them to the custom props table."
+        )
+        self.btn_reconstruct_splat_props.clicked.connect(self._on_reconstruct_splat_props_clicked)
+        rec_actions_row.addWidget(self.btn_reconstruct_splat_props)
+        reconstruct_grp_lay.addRow("", rec_actions_row)
+
+        lay.addWidget(reconstruct_grp)
 
         # Table Widget
         self.tbl_custom_props = QtWidgets.QTableWidget(0, 9)
@@ -2754,6 +2833,27 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         )
         self.combo_prop_uv_mode.currentIndexChanged.connect(self._on_prop_param_changed)
         grp_edit_lay.addRow("UV Mapping:", self.combo_prop_uv_mode)
+
+        # Shader Target (Karma MaterialX, Arnold, Redshift, All, USD Preview)
+        self.combo_prop_shader_target = QtWidgets.QComboBox()
+        self.combo_prop_shader_target.addItems([
+            "Match Room / Global Target (Auto)",
+            "Karma (MaterialX Standard Surface)",
+            "Arnold (Standard Surface)",
+            "Redshift (StandardMaterial)",
+            "All Renderers",
+            "USD Preview Only",
+        ])
+        self.combo_prop_shader_target.setToolTip(
+            "Target renderer shader to build for this prop in Solaris /stage:\n"
+            "• Match Room / Global Target (Auto): Inherits the renderer target chosen in Room Architecture / Dome.\n"
+            "• Karma (MaterialX): Native mtlxstandard_surface for Karma CPU / GPU viewport and production renders.\n"
+            "• Arnold: Native arnold:standard_surface with arnold:image.\n"
+            "• Redshift: Native redshift::StandardMaterial.\n"
+            "• All Renderers: Authors all shaders and surface outputs simultaneously."
+        )
+        self.combo_prop_shader_target.currentIndexChanged.connect(self._on_prop_param_changed)
+        grp_edit_lay.addRow("Shader Target:", self.combo_prop_shader_target)
 
         # Splat Texture Baking Controls
         bake_cfg_row = QtWidgets.QHBoxLayout()
@@ -3690,6 +3790,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             if hasattr(self, 'combo_prop_uv_mode'):
                 uv_mode = p.get("uv_mode", "project_splat")
                 self.combo_prop_uv_mode.setCurrentIndex(1 if uv_mode == "mesh_uv" else 0)
+            if hasattr(self, 'combo_prop_shader_target'):
+                target_map = {"auto": 0, "karma": 1, "arnold": 2, "redshift": 3, "all": 4, "preview": 5}
+                p_t = str(p.get("renderer_target", "auto")).lower()
+                self.combo_prop_shader_target.setCurrentIndex(target_map.get(p_t, 0))
         finally:
             self._updating_custom_props_ui = False
 
@@ -3713,6 +3817,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             p["texture_path"] = self.txt_prop_texture.text().strip()
         if hasattr(self, 'combo_prop_uv_mode'):
             p["uv_mode"] = "mesh_uv" if self.combo_prop_uv_mode.currentIndex() == 1 else "project_splat"
+        if hasattr(self, 'combo_prop_shader_target'):
+            targets = ["auto", "karma", "arnold", "redshift", "all", "preview"]
+            p["renderer_target"] = targets[self.combo_prop_shader_target.currentIndex()]
 
         self._updating_custom_props_ui = True
         try:
@@ -3925,61 +4032,144 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.log("Cleared all custom props from list.", "INFO")
 
     def _on_populate_splat_props_clicked(self):
-        """Populate detected architectural props and columns from Gaussian splats into Custom Props table."""
-        props = []
-        if hasattr(self, '_last_room_data') and self._last_room_data:
-            props = self._last_room_data.get("props", [])
+        """Redirect legacy populate button to advanced 3D prop reconstruction."""
+        self._on_reconstruct_splat_props_clicked()
 
-        if not props and getattr(self, '_splat_scene', None):
-            scale_val = float(self.sld_arch_scale.value()) if hasattr(self, 'sld_arch_scale') else 1.0
-            flip_y = self.chk_splat_flip_y.isChecked() if hasattr(self, 'chk_splat_flip_y') else True
-            proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "Cylinder Columns & Boxes"
-            proxy_shape_mode = "box" if "Boxes" in proxy_shape_sel else ("sphere" if "Sphere" in proxy_shape_sel else "auto")
-            res = self._splat_scene.analyze_room_architecture(
-                flip_y=flip_y,
-                scene_scale=scale_val,
-                extract_props=True,
-                proxy_shape_mode=proxy_shape_mode,
-            )
-            if res:
-                self._last_room_data = res
-                props = res.get("props", [])
-
-        if not props:
-            self.log("No interior props or columns detected. Ensure a Gaussian Splat is loaded in Tab 2 or 3.", "WARNING")
+    def _on_reconstruct_splat_props_clicked(self):
+        """Analyze interior Gaussian Splats and reconstruct them into clean 3D polygonal geometry."""
+        splat_file = self.txt_splat_file.text().strip() if hasattr(self, 'txt_splat_file') else ""
+        if not splat_file or not os.path.isfile(splat_file):
+            self.log("Please load a valid .ply Gaussian Splat file first.", "ERROR")
             return
 
-        existing_names = {p.get("name") for p in self._custom_props}
-        added = 0
-        for p in props:
-            name = p.get("name", "prop")
-            if name in existing_names:
-                continue
-            kind = p.get("kind", "prop")
-            shape = p.get("shape", "box")
-            center = p.get("center", [0.0, 0.0, 0.0])
-            prop_item = {
-                "name": name,
-                "kind": kind,
-                "shape": shape,
-                "file_path": f"[Proxy {shape.capitalize()}]",
-                "tx": float(center[0]),
-                "ty": 0.0,
-                "tz": float(center[2]),
-                "rx": 0.0,
-                "ry": 0.0,
-                "rz": 0.0,
-                "scale": 1.0,
-                "snap_floor": True,
-                "project_texture": True,
-                "uv_mode": "project_splat",
-                "texture_path": "",
-                "enabled": True,
-            }
-            self._add_custom_prop_entry(prop_item)
-            added += 1
+        from hdri_match_solaris.gaussian_splat import GaussianSplatScene
+        from hdri_match_solaris.splat_prop_reconstructor import (
+            cluster_interior_splats,
+            reconstruct_heightfield_prop,
+            reconstruct_vdb_prop,
+        )
 
-        self.log(f"Populated {added} detected splat props / columns as proxy objects.", "SUCCESS")
+        try:
+            self.btn_reconstruct_splat_props.setEnabled(False)
+            self.btn_reconstruct_splat_props.setText("⏳ Analyzing & Reconstructing...")
+            QtWidgets.QApplication.processEvents()
+
+            # 1. Load splat positions
+            scene = getattr(self, '_splat_scene', None)
+            if not scene or getattr(scene, 'positions', None) is None:
+                scene = GaussianSplatScene.from_ply(splat_file)
+                self._splat_scene = scene
+
+            flip_y = self.chk_splat_flip_y.isChecked() if hasattr(self, 'chk_splat_flip_y') else True
+            scale_val = float(self.sld_arch_scale.value()) if hasattr(self, 'sld_arch_scale') else 1.0
+
+            pts = scene.positions.copy()
+            if flip_y:
+                pts[:, 1] = -pts[:, 1]
+            pts *= scale_val
+
+            # 2. Query room elevation & bounds
+            floor_y = float(self.sld_arch_floor_y.value()) if hasattr(self, 'sld_arch_floor_y') else 0.0
+            ceil_y = float(self.sld_arch_ceil_y.value()) if hasattr(self, 'sld_arch_ceil_y') else floor_y + 2.9
+
+            room_bounds = None
+            if hasattr(self, '_last_room_data') and self._last_room_data:
+                rd = self._last_room_data
+                room_bounds = (
+                    float(rd.get("x_min", -5.0)),
+                    float(rd.get("x_max", 5.0)),
+                    float(rd.get("z_min", -5.0)),
+                    float(rd.get("z_max", 5.0)),
+                )
+
+            # 3. Cluster interior splats
+            voxel_param = float(self.sld_reconstruct_voxel.value()) if hasattr(self, 'sld_reconstruct_voxel') else 0.035
+            clusters = cluster_interior_splats(
+                pts,
+                floor_y=floor_y,
+                ceil_y=ceil_y,
+                room_bounds=room_bounds,
+                vox_size=0.15,
+                min_splats=600,
+            )
+
+            if not clusters:
+                self.log("No discrete interior prop clusters found. Ensure the room has furniture or props inside.", "WARNING")
+                return
+
+            chosen_method = self.combo_reconstruct_method.currentText() if hasattr(self, 'combo_reconstruct_method') else "Auto"
+
+            out_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/props"
+            os.makedirs(out_dir, exist_ok=True)
+
+            existing_names = {p.get("name") for p in self._custom_props}
+            reconstructed_count = 0
+
+            for c in clusters:
+                method = c["suggested_method"]
+                if "Heightfield" in chosen_method:
+                    method = "heightfield"
+                elif "OpenVDB" in chosen_method:
+                    method = "vdb"
+
+                c_name = f"{c['name']}_{method}"
+                if c_name in existing_names:
+                    c_name = f"{c_name}_{c['id']}"
+
+                out_mesh_file = os.path.join(out_dir, f"{c_name}.bgeo.sc").replace("\\", "/")
+
+                # Reconstruct
+                if method == "heightfield":
+                    res_file = reconstruct_heightfield_prop(
+                        c["points"],
+                        floor_y=floor_y,
+                        grid_res=max(0.015, voxel_param),
+                        skirt_to_floor=True,
+                        output_path=out_mesh_file,
+                    )
+                else:
+                    res_file = reconstruct_vdb_prop(
+                        c["points"],
+                        voxel_size=max(0.015, voxel_param),
+                        radius_scale=1.2,
+                        smooth_iterations=1,
+                        adaptivity=0.01,
+                        output_path=out_mesh_file,
+                    )
+
+                if res_file and os.path.isfile(res_file):
+                    prop_item = {
+                        "name": c_name,
+                        "file_path": res_file,
+                        "tx": float(c["center"][0]),
+                        "ty": 0.0,
+                        "tz": float(c["center"][2]),
+                        "rx": 0.0,
+                        "ry": 0.0,
+                        "rz": 0.0,
+                        "scale": 1.0,
+                        "snap_floor": True,
+                        "project_texture": True,
+                        "uv_mode": "project_splat",
+                        "texture_path": "",
+                        "cast_shadows": True,
+                        "enabled": True,
+                    }
+                    self._add_custom_prop_entry(prop_item)
+                    reconstructed_count += 1
+
+            if reconstructed_count > 0:
+                self.log(f"Successfully reconstructed {reconstructed_count} 3D props from Gaussian Splats!", "SUCCESS")
+                self._update_custom_props_stage_clicked()
+            else:
+                self.log("Reconstruction completed but no valid meshes were generated.", "WARNING")
+
+        except Exception as e:
+            self.log(f"Prop reconstruction error: {e}", "ERROR")
+            traceback.print_exc()
+        finally:
+            self.btn_reconstruct_splat_props.setEnabled(True)
+            self.btn_reconstruct_splat_props.setText("⚡ Reconstruct 3D Props from Splats")
 
     def _update_custom_props_stage_clicked(self):
         """Update or create custom props in Solaris /stage."""
@@ -4015,6 +4205,49 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 cand = os.path.join(hip_dir, "hdri_match", f"{base_name}_splat_baked_hdri.exr").replace(chr(92), "/")
                 if os.path.isfile(cand):
                     hdri_tex = cand
+                elif getattr(self, '_albedo_texture_path', None) and os.path.isfile(self._albedo_texture_path):
+                    hdri_tex = self._albedo_texture_path.replace(chr(92), "/")
+                elif getattr(self, '_last_hdri_texture', None) and os.path.isfile(self._last_hdri_texture):
+                    hdri_tex = self._last_hdri_texture.replace(chr(92), "/")
+                else:
+                    # Check existing domelight or cache
+                    for d_node in stage_node.children():
+                        if "domelight" in d_node.type().name().lower() or d_node.name() in ("hdri_dome", "dome"):
+                            for p_name in ["xn__inputstexturefile_06a", "texturefile"]:
+                                p_val = d_node.parm(p_name)
+                                if p_val and p_val.eval() and os.path.isfile(p_val.eval()):
+                                    hdri_tex = p_val.eval().replace(chr(92), "/")
+                                    break
+                            if hdri_tex: break
+                    if not hdri_tex:
+                        cache_cands = [
+                            "E:/PROJECTS/HDRI_MATCH_SOLARIS/SPLATS/Reception room/splatforge_cache/textures/hdri_dome.exr",
+                            "E:/PROJECTS/HDRI_MATCH_SOLARIS/SPLATS/Reception room/splatforge_cache/textures/hdri_dome_2048x1024.exr",
+                            "E:/PROJECTS/HDRI_MATCH_SOLARIS/hdri_match/planar_textures_4096/floor_albedo.exr",
+                        ]
+                        for cc in cache_cands:
+                            if os.path.isfile(cc):
+                                hdri_tex = cc
+                                break
+
+            # Determine renderer shader target (Karma MaterialX, Arnold, Redshift, All, USD Preview)
+            renderer_target = "all"
+            if hasattr(self, 'combo_prop_shader_target'):
+                _p_idx = self.combo_prop_shader_target.currentIndex()
+                _prop_targets = ["auto", "karma", "arnold", "redshift", "all", "preview"]
+                if 0 <= _p_idx < len(_prop_targets) and _prop_targets[_p_idx] != "auto":
+                    renderer_target = _prop_targets[_p_idx]
+            if renderer_target == "all" or (hasattr(self, 'combo_prop_shader_target') and self.combo_prop_shader_target.currentIndex() == 0):
+                if hasattr(self, 'combo_arch_renderer_target'):
+                    _a_idx = self.combo_arch_renderer_target.currentIndex()
+                    _arch_targets = ["all", "karma", "arnold", "redshift", "preview"]
+                    if 0 <= _a_idx < len(_arch_targets):
+                        renderer_target = _arch_targets[_a_idx]
+                elif hasattr(self, 'combo_renderer_target'):
+                    _r_idx = self.combo_renderer_target.currentIndex()
+                    _render_targets = ["all", "arnold", "karma", "redshift", "preview"]
+                    if 0 <= _r_idx < len(_render_targets):
+                        renderer_target = _render_targets[_r_idx]
 
             res_node = lop_custom_props.setup_custom_props_nodes(
                 stage_node,
@@ -4022,6 +4255,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 probe_pos=probe_pos,
                 floor_y=floor_y,
                 hdri_texture=hdri_tex,
+                renderer_target=renderer_target,
+                mat_mode="pbr",
                 wire_into_stream=True,
             )
             act_count = len([p for p in props_data if p.get("enabled", True)])
@@ -4367,6 +4602,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 self.lbl_arch_status.setText(msg)
                 self.lbl_arch_status.setStyleSheet("color: #2980b9; font-weight: bold; font-size: 11px;")
                 self.log(msg, "INFO")
+                # If room architecture already exists in /stage, automatically rebuild at calibrated scale
+                stage_node = self._get_stage_node()
+                if stage_node and stage_node.node("splat_room_architecture"):
+                    self._build_room_architecture_clicked()
         except Exception as e:
             self.log_error(f"Auto-scale failed: {e}", e)
 
@@ -4381,6 +4620,14 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         if not stage_node:
             self.log("Solaris /stage not available.", "ERROR")
             return
+
+        # Ensure conflicting legacy projection nodes (hdri_match_projection, hdri_match_materials) are disabled
+        for p_name in ("hdri_match_projection", "hdri_match_materials"):
+            pn = stage_node.node(p_name)
+            if pn:
+                pn.bypass(True)
+        if hasattr(self, 'grp_ground_proj'):
+            self.grp_ground_proj.setChecked(False)
 
         try:
             import importlib
@@ -4545,14 +4792,14 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     from hdri_match_solaris.gaussian_splat import GaussianSplatBaker
                     props_baked_dir = os.path.join(hip_dir, "hdri_match", "props_baked").replace("\\", "/")
                     os.makedirs(props_baked_dir, exist_ok=True)
-                    for p in room_data["props"]:
-                        p_name = p.get("name", "prop")
+                    for prop_item in room_data.get("props", []):
+                        p_name = prop_item.get("name", "prop")
                         p_tex_path = os.path.join(props_baked_dir, f"{p_name}_splat_baked_albedo.exr").replace("\\", "/")
                         if not os.path.isfile(p_tex_path):
                             self.log(f"Auto-baking authentic surface texture for '{p_name}' from 3D splats...", "INFO")
                             GaussianSplatBaker.bake_prop_surface_texture(
                                 self._splat_scene,
-                                p,
+                                prop_item,
                                 p_tex_path,
                                 scene_scale=scale_val,
                                 flip_y=flip_y,
@@ -4569,7 +4816,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             else:
                 self.log("Reusing existing /stage/hdri_dome (domelight)", "DETAIL")
             dome_node.bypass(False)
-            if p.get("renderer_target") == "arnold" or p.get("arch_renderer_target") == "arnold":
+            arch_targets = ["all", "arnold", "karma", "redshift", "preview"]
+            arch_target = "all"
+            if hasattr(self, 'combo_arch_renderer_target'):
+                _idx = self.combo_arch_renderer_target.currentIndex()
+                if 0 <= _idx < len(arch_targets):
+                    arch_target = arch_targets[_idx]
+            if arch_target == "arnold":
                 _ensure_dome_light_latlong(dome_node)
 
             if hdri_tex and os.path.isfile(hdri_tex):
@@ -4721,12 +4974,12 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             if snap_lookdev:
                 try:
                     from hdri_match_solaris import lop_lookdev
-                    lookdev_r = float(self.sld_lookdev_radius.value()) if hasattr(self, 'sld_lookdev_radius') else 0.15
-                    lookdev_h = float(self.sld_lookdev_height.value()) if hasattr(self, 'sld_lookdev_height') else 1.0
+                    lookdev_r = float(self.sld_splat_lookdev_radius.value()) if hasattr(self, 'sld_splat_lookdev_radius') else (float(self.sld_lookdev_radius.value()) if hasattr(self, 'sld_lookdev_radius') else 0.15)
+                    lookdev_h = float(self.sld_splat_lookdev_height.value()) if hasattr(self, 'sld_splat_lookdev_height') else (float(self.sld_lookdev_height.value()) if hasattr(self, 'sld_lookdev_height') else 1.2)
                     lookdev_s = float(self.sld_splat_lookdev_scale.value()) if hasattr(self, 'sld_splat_lookdev_scale') else 1.0
-                    inc_white = self.chk_lookdev_white.isChecked() if hasattr(self, 'chk_lookdev_white') else False
-                    inc_macbeth = self.chk_splat_lookdev_macbeth.isChecked() if hasattr(self, 'chk_splat_lookdev_macbeth') else False
-                    inc_stand = self.chk_lookdev_stand.isChecked() if hasattr(self, 'chk_lookdev_stand') else True
+                    inc_white = self.chk_splat_lookdev_white.isChecked() if hasattr(self, 'chk_splat_lookdev_white') else (self.chk_lookdev_white.isChecked() if hasattr(self, 'chk_lookdev_white') else True)
+                    inc_macbeth = self.chk_splat_lookdev_macbeth.isChecked() if hasattr(self, 'chk_splat_lookdev_macbeth') else True
+                    inc_stand = True
 
                     lop_lookdev.create_lookdev_rig_node(
                         stage_node,
@@ -4754,6 +5007,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                         probe_pos=solaris_probe,
                         floor_y=room_data["floor_y"],
                         hdri_texture=hdri_tex,
+                        renderer_target=arch_renderer_target,
+                        mat_mode=mat_mode,
                         wire_into_stream=True,
                     )
             except Exception as ex_cp:
@@ -4844,8 +5099,102 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         if arch_node and getattr(self, '_last_room_data', None):
             self._build_room_architecture_clicked()
         proj_node = stage_node.node("hdri_match_projection")
-        if proj_node and not proj_node.isBypassed():
+        if arch_node:
+            if proj_node:
+                proj_node.bypass(True)
+        elif proj_node and not proj_node.isBypassed():
             self._create_or_update_ground_projection(notify_ui=False)
+
+    def _on_arch_shading_toggled(self, *args):
+        """Live update room architecture shading and visibility flags (Double-Sided, Shadows, Invisible) in /stage."""
+        stage_node = self._get_stage_node()
+        if not stage_node or not hou:
+            return
+        arch_node = stage_node.node("splat_room_architecture")
+        if not arch_node or arch_node.isBypassed():
+            return
+        try:
+            ds = self.chk_arch_double_sided.isChecked()
+            sh = self.chk_arch_shadows.isChecked()
+            inv = self.chk_arch_invisible.isChecked() if hasattr(self, 'chk_arch_invisible') else False
+
+            changed = False
+            for pname, pval in [("double_sided", ds), ("room_shadows", sh), ("room_invisible", inv)]:
+                p = arch_node.parm(pname)
+                if p and p.eval() != pval:
+                    p.set(pval)
+                    changed = True
+            if changed:
+                arch_node.cook(force=True)
+                self.log(f"Live updated Room Shading: Double-Sided={ds}, Shadows={sh}, Invisible={inv}", "DETAIL")
+            elif not arch_node.parm("double_sided"):
+                # Node didn't have spare parameters yet, rebuild via _build_room_architecture_clicked
+                self._build_room_architecture_clicked()
+        except Exception as e:
+            self.log_error(f"Failed to update room shading: {e}", e)
+
+    def _on_portal_texture_mode_changed(self, *args):
+        """Live update physical portal light textures (Cropped / Full / None) in /stage."""
+        stage_node = self._get_stage_node()
+        if not stage_node or not hou:
+            return
+        room_data = getattr(self, '_last_room_data', None)
+        windows = room_data.get("windows", []) if room_data else []
+        if not windows:
+            return
+        try:
+            from hdri_match_solaris import lop_splat
+            portal_tex_sel = self.combo_arch_portal_texture.currentText()
+            portal_tex_mode = "cropped" if "Cropped" in portal_tex_sel else ("full" if "Full" in portal_tex_sel else "none")
+            portal_int = float(self.sld_arch_portal_intensity.value()) if hasattr(self, 'sld_arch_portal_intensity') else 1.0
+            hdri_tex = getattr(self, '_current_calibrated_path', "") or (self.txt_hdri.text().strip() if hasattr(self, 'txt_hdri') else "")
+            c = room_data.get("center", [0.0, 1.45, 0.0])
+            probe_pos = (float(c[0]), float(room_data.get("floor_y", 0.0)) + 1.45, float(c[2]))
+            lop_splat.spawn_portal_lights(
+                stage_node,
+                windows,
+                cam_pos=probe_pos,
+                hdri_texture=hdri_tex,
+                portal_intensity_mult=portal_int,
+                portal_texture_mode=portal_texture_mode,
+                clear_existing=True,
+            )
+            lop_splat.wire_solaris_stage_stream(stage_node)
+            self.log(f"Updated portal lights texture mode: {portal_tex_sel}", "INFO")
+        except Exception as e:
+            self.log_error(f"Failed to update portal texture mode: {e}", e)
+
+    def _on_splat_lookdev_param_changed(self, *args):
+        """Live update existing Lookdev Rig spare parameters in /stage without full node rebuild."""
+        stage_node = self._get_stage_node()
+        if not stage_node or not hou:
+            return
+        ld_node = stage_node.node("hdri_match_lookdev")
+        if not ld_node or ld_node.isBypassed():
+            return
+        try:
+            lookdev_r = float(self.sld_splat_lookdev_radius.value()) if hasattr(self, 'sld_splat_lookdev_radius') else 0.15
+            lookdev_h = float(self.sld_splat_lookdev_height.value()) if hasattr(self, 'sld_splat_lookdev_height') else 1.2
+            lookdev_s = float(self.sld_splat_lookdev_scale.value()) if hasattr(self, 'sld_splat_lookdev_scale') else 1.0
+            inc_white = self.chk_splat_lookdev_white.isChecked() if hasattr(self, 'chk_splat_lookdev_white') else True
+            inc_macbeth = self.chk_splat_lookdev_macbeth.isChecked() if hasattr(self, 'chk_splat_lookdev_macbeth') else True
+
+            changed = False
+            for pname, pval in [
+                ("sphere_radius", lookdev_r),
+                ("stand_height", lookdev_h),
+                ("rig_scale", lookdev_s),
+                ("include_white", inc_white),
+                ("include_macbeth", inc_macbeth),
+            ]:
+                p = ld_node.parm(pname)
+                if p and p.eval() != pval:
+                    p.set(pval)
+                    changed = True
+            if changed:
+                ld_node.cook(force=True)
+        except Exception:
+            pass
 
     def _bake_planar_room_textures_clicked(self):
         """Bake high-resolution planar rectilinear textures for floor, ceiling, and walls."""
@@ -5012,20 +5361,58 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             hou.ui.displayMessage(f"Planar texture bake failed:\n{err_msg}", severity=hou.severityType.Error)
 
     def _update_lookdev_rig_clicked(self):
-        """Update or create the Lookdev Verification Rig with live UI parameters."""
+        """Update or create the Lookdev Verification Rig with live UI parameters at the physical room center."""
         stage_node = self._get_stage_node()
         if not stage_node:
             self.log("Solaris /stage not available.", "ERROR")
             return
         try:
             from hdri_match_solaris import lop_lookdev
-            floor_y = float(self.sld_arch_floor_y.value()) if hasattr(self, 'sld_arch_floor_y') else 0.0
-            pos_x = float(self.sld_probe_x.value()) if hasattr(self, 'sld_probe_x') else 0.0
-            pos_z = float(self.sld_probe_z.value()) if hasattr(self, 'sld_probe_z') else 0.0
+
+            # Resolve physical room center and floor Y
+            room_data = getattr(self, '_last_room_data', None)
+            if not room_data and getattr(self, '_splat_scene', None):
+                try:
+                    flip_y = self.chk_splat_flip_y.isChecked() if hasattr(self, 'chk_splat_flip_y') else True
+                    scale_val = float(self.sld_arch_scale.value()) if hasattr(self, 'sld_arch_scale') else 1.0
+                    int_mode = "tight" if (hasattr(self, 'combo_arch_interior_mode') and self.combo_arch_interior_mode.currentIndex() == 0) else "full"
+                    build_props = self.chk_arch_props.isChecked() if hasattr(self, 'chk_arch_props') else True
+                    proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "Cylinder Columns & Boxes"
+                    proxy_shape_mode = "box" if "Boxes Only" in proxy_shape_sel else ("sphere" if "Sphere" in proxy_shape_sel else "auto")
+                    room_data = self._splat_scene.analyze_room_architecture(
+                        flip_y=flip_y,
+                        scene_scale=scale_val,
+                        interior_mode=int_mode,
+                        extract_props=build_props,
+                        proxy_shape_mode=proxy_shape_mode,
+                    )
+                    self._last_room_data = room_data
+                except Exception:
+                    pass
+
+            if room_data and "center" in room_data:
+                pos_x = float(room_data["center"][0])
+                pos_z = float(room_data["center"][2])
+                floor_y = float(self.sld_arch_floor_y.value()) if hasattr(self, 'sld_arch_floor_y') else float(room_data.get("floor_y", 0.0))
+            else:
+                ld_existing = stage_node.node("hdri_match_lookdev")
+                if ld_existing and ld_existing.parm("pos_x") and (abs(ld_existing.parm("pos_x").eval()) > 1e-4 or abs(ld_existing.parm("pos_z").eval()) > 1e-4):
+                    pos_x = float(ld_existing.parm("pos_x").eval())
+                    pos_z = float(ld_existing.parm("pos_z").eval())
+                    floor_y = float(ld_existing.parm("floor_y").eval())
+                elif hasattr(self, 'sld_arch_floor_y'):
+                    pos_x = 0.0
+                    pos_z = 0.0
+                    floor_y = float(self.sld_arch_floor_y.value())
+                else:
+                    pos_x = float(self.sld_probe_x.value()) if hasattr(self, 'sld_probe_x') else 0.0
+                    pos_z = float(self.sld_probe_z.value()) if hasattr(self, 'sld_probe_z') else 0.0
+                    floor_y = 0.0
+
             lookdev_r = float(self.sld_splat_lookdev_radius.value()) if hasattr(self, 'sld_splat_lookdev_radius') else 0.15
             lookdev_h = float(self.sld_splat_lookdev_height.value()) if hasattr(self, 'sld_splat_lookdev_height') else 1.2
             lookdev_s = float(self.sld_splat_lookdev_scale.value()) if hasattr(self, 'sld_splat_lookdev_scale') else 1.0
-            inc_white = self.chk_splat_lookdev_white.isChecked() if hasattr(self, 'chk_splat_lookdev_white') else False
+            inc_white = self.chk_splat_lookdev_white.isChecked() if hasattr(self, 'chk_splat_lookdev_white') else True
             inc_macbeth = self.chk_splat_lookdev_macbeth.isChecked() if hasattr(self, 'chk_splat_lookdev_macbeth') else True
 
             ld_node = lop_lookdev.create_lookdev_rig_node(
@@ -5042,10 +5429,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             )
             self._merge_light_networks(notify_ui=False)
             if ld_node:
+                ld_node.bypass(False)
                 ld_node.cook(force=True)
                 ld_node.setDisplayFlag(True)
+            if hasattr(self, 'chk_arch_snap_lookdev'):
+                self.chk_arch_snap_lookdev.setChecked(True)
             self.log(
-                f"Updated Lookdev Rig: Stand Height={lookdev_h:.2f}m, Ball Radius={lookdev_r:.2f}m, Scale={lookdev_s:.1f}x at Floor Y={floor_y:.2f}m",
+                f"Updated Lookdev Rig: Stand Height={lookdev_h:.2f}m, Ball Radius={lookdev_r:.2f}m, Scale={lookdev_s:.2f}x at Room Center=({pos_x:.2f}, {floor_y:.2f}, {pos_z:.2f})",
                 "SUCCESS"
             )
         except Exception as e:
@@ -5151,12 +5541,20 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 props_data = self._get_custom_props_data() if hasattr(self, '_get_custom_props_data') else []
                 if props_data:
                     solaris_probe = (float(room_data["center"][0]), float(room_data["floor_y"]) + 1.45, float(room_data["center"][2]))
+                    _arch_target = "all"
+                    if hasattr(self, 'combo_arch_renderer_target'):
+                        _a_idx = self.combo_arch_renderer_target.currentIndex()
+                        _arch_targets = ["all", "karma", "arnold", "redshift", "preview"]
+                        if 0 <= _a_idx < len(_arch_targets):
+                            _arch_target = _arch_targets[_a_idx]
                     lop_custom_props.setup_custom_props_nodes(
                         stage_node,
                         props_data,
                         probe_pos=solaris_probe,
                         floor_y=room_data["floor_y"],
                         hdri_texture=res.get("albedo_texture", hdri_path),
+                        renderer_target=_arch_target,
+                        mat_mode="pbr",
                         wire_into_stream=True,
                     )
             except Exception as ex_cp:
@@ -5427,7 +5825,24 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._hdri_full_array = None
         self._hdri_orig_full = None
         clean_path = os.path.normpath(out_path).replace("\\", "/")
+
+        # Ensure ground/room projection is NOT enabled by this splat bake (splats have their own room architecture)
+        if hasattr(self, 'grp_ground_proj'):
+            self.grp_ground_proj.setChecked(False)
+
+        # Bypass any legacy projection nodes in /stage so /environment is never created
+        stage_node = self._get_stage_node()
+        if stage_node:
+            for p_name in ("hdri_match_projection", "hdri_match_materials"):
+                pn = stage_node.node(p_name)
+                if pn:
+                    pn.bypass(True)
+
+        # Update HDRI text field without firing accidental cascading projection triggers
+        self.txt_hdri.blockSignals(True)
         self.txt_hdri.setText(clean_path)
+        self.txt_hdri.blockSignals(False)
+
         self._load_hdri_preview(clean_path)
         self._sync_node()
         if 'hou' in sys.modules:
@@ -5691,6 +6106,181 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 f"Referenced into Solaris /stage as 'splat_scene_cloud'.",
                 title="Splat Point Cloud Baked"
             )
+
+    def _display_splats_bakegs_clicked(self):
+        """
+        Display Gaussian Splats using Houdini's native Bake GSplats reader (bakegsplat SOP).
+        Creates /obj/native_splats_reader and connects to Solaris /stage/splat_scene_bakegs.
+        """
+        ply_path = self.txt_splat_file.text().strip()
+        if not ply_path or not os.path.isfile(ply_path):
+            self.log_error("Please select a valid Gaussian Splat (.ply) file first.")
+            if hou.isUIAvailable():
+                hou.ui.displayMessage("Please select or load a valid Gaussian Splat (.ply) file first.", severity=hou.severityType.Warning)
+            return
+
+        stage_node = self._get_stage_node()
+        if not stage_node:
+            self.log_error("No active Solaris /stage node found.")
+            return
+
+        # Check if bakegsplat is available in this Houdini session (Houdini 21+)
+        has_bakegs = "bakegsplat" in hou.sopNodeTypeCategory().nodeTypes()
+        if not has_bakegs:
+            msg = (
+                "Houdini native 'Bake GSplats' (bakegsplat SOP) is available in Houdini 21+.\n\n"
+                "Loading native USD Point Cloud into Solaris /stage instead."
+            )
+            self.log(msg, "WARNING")
+            if hou.isUIAvailable():
+                hou.ui.displayMessage(msg, severity=hou.severityType.Warning)
+            self._ensure_splat_usd_loaded(visible=True)
+            return
+
+        try:
+            obj_net = hou.node("/obj")
+            if not obj_net:
+                self.log_error("Cannot find /obj network.")
+                return
+
+            geo_node = obj_net.node("native_splats_reader")
+
+            def _configure_splat_sop_nodes(gnode):
+                """Helper to configure bake_gs and scale_to_scene with exact studio settings."""
+                b_sop = gnode.node("bake_gs")
+                if b_sop:
+                    if b_sop.parm("linearize"):
+                        b_sop.parm("linearize").set(1)
+                    if b_sop.parm("gsplat"):
+                        b_sop.parm("gsplat").set(1)
+                    if b_sop.parm("sphcoeff"):
+                        b_sop.parm("sphcoeff").set(0)
+                    if b_sop.parm("deleteattrib"):
+                        b_sop.parm("deleteattrib").set(1)
+                    if b_sop.parm("noshadowcast"):
+                        b_sop.parm("noshadowcast").set(1)
+
+                x_sop = gnode.node("scale_to_scene")
+                if x_sop:
+                    if x_sop.parmTuple("r"):
+                        x_sop.parmTuple("r").set((-180.0, 0.0, 0.0))
+                    else:
+                        if x_sop.parm("rx"):
+                            x_sop.parm("rx").set(-180.0)
+                        if x_sop.parm("ry"):
+                            x_sop.parm("ry").set(0.0)
+                        if x_sop.parm("rz"):
+                            x_sop.parm("rz").set(0.0)
+                    if x_sop.parmTuple("t"):
+                        x_sop.parmTuple("t").set((0.0, 0.0, 0.0))
+                    if x_sop.parmTuple("s"):
+                        x_sop.parmTuple("s").set((1.0, 1.0, 1.0))
+                    scale_val = 1.0
+                    if hasattr(self, 'sld_arch_scale') and self.sld_arch_scale.value() > 0:
+                        scale_val = self.sld_arch_scale.value()
+                    if x_sop.parm("scale"):
+                        x_sop.parm("scale").set(scale_val)
+
+            existing_lop = stage_node.node("splat_scene_bakegs")
+            if geo_node:
+                _configure_splat_sop_nodes(geo_node)
+
+            if existing_lop:
+                btn_txt = getattr(self, 'btn_display_bakegs', None).text() if hasattr(self, 'btn_display_bakegs') else ""
+                if "Hide" in btn_txt:
+                    existing_lop.bypass(True)
+                    is_visible = False
+                else:
+                    existing_lop.bypass(False)
+                    is_visible = True
+                    try:
+                        existing_lop.cook(force=True)
+                    except Exception:
+                        pass
+
+                from hdri_match_solaris import lop_splat
+                lop_splat.reconnect_stage_network(stage_node)
+
+                self.log(f"Native Splats (BakeGS) {'SHOWN' if is_visible else 'HIDDEN'} in viewport.", "INFO")
+                if hasattr(self, 'btn_display_bakegs'):
+                    if is_visible:
+                        self.btn_display_bakegs.setText("🔮 Hide Native Splats (BakeGS)")
+                        self.btn_display_bakegs.setStyleSheet(
+                            "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
+                            "QPushButton:hover { background-color: #2ecc71; }"
+                        )
+                    else:
+                        self.btn_display_bakegs.setText("🔮 Display Native Splats (BakeGS)")
+                        self.btn_display_bakegs.setStyleSheet(
+                            "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
+                            "QPushButton:hover { background-color: #9b59b6; }"
+                        )
+                return
+
+            self.log(f"Setting up native Houdini 21 Bake GSplats reader for: {os.path.basename(ply_path)}...", "INFO")
+            if not geo_node:
+                geo_node = obj_net.createNode("geo", "native_splats_reader")
+                geo_node.setColor(hou.Color((0.55, 0.45, 0.85)))
+
+            # Clear or update SOP nodes inside geo_node
+            file_sop = geo_node.node("ply_source")
+            if not file_sop:
+                file_sop = geo_node.createNode("file", "ply_source")
+            file_sop.parm("file").set(ply_path.replace("\\", "/"))
+
+            bake_sop = geo_node.node("bake_gs")
+            if not bake_sop:
+                bake_sop = geo_node.createNode("bakegsplat", "bake_gs")
+            bake_sop.setInput(0, file_sop)
+
+            xform_sop = geo_node.node("scale_to_scene")
+            if not xform_sop:
+                xform_sop = geo_node.createNode("xform", "scale_to_scene")
+            xform_sop.setInput(0, bake_sop)
+
+            _configure_splat_sop_nodes(geo_node)
+
+            out_sop = geo_node.node("OUT_splats")
+            if not out_sop:
+                out_sop = geo_node.createNode("null", "OUT_splats")
+            out_sop.setInput(0, xform_sop)
+            out_sop.setDisplayFlag(True)
+            out_sop.setRenderFlag(True)
+            geo_node.layoutChildren()
+
+            # Import into Solaris /stage
+            sop_imp = stage_node.node("splat_scene_bakegs")
+            if not sop_imp:
+                sop_imp = stage_node.createNode("sopimport", "splat_scene_bakegs")
+                sop_imp.setColor(hou.Color((0.55, 0.45, 0.85)))
+            sop_imp.parm("soppath").set(out_sop.path())
+            if sop_imp.parm("primpath"):
+                sop_imp.parm("primpath").set("/stage/splat_scene_bakegs")
+            if sop_imp.parm("importstyle"):
+                sop_imp.parm("importstyle").set("flatten")
+            sop_imp.bypass(False)
+            try:
+                sop_imp.cook(force=True)
+            except Exception:
+                pass
+
+            from hdri_match_solaris import lop_splat
+            lop_splat.reconnect_stage_network(stage_node)
+
+            self.log(f"Native Splats (BakeGS) loaded in Solaris viewport & /stage: {sop_imp.path()}", "SUCCESS")
+            if hasattr(self, 'btn_display_bakegs'):
+                self.btn_display_bakegs.setText("🔮 Hide Native Splats (BakeGS)")
+                self.btn_display_bakegs.setStyleSheet(
+                    "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
+                    "QPushButton:hover { background-color: #2ecc71; }"
+                )
+            if hou.isUIAvailable():
+                hou.ui.setStatusMessage("Native Gaussian Splats active in Solaris viewport & Karma XPU.", severity=hou.severityType.Message)
+
+        except Exception as e:
+            self.log_error("Failed to display native Gaussian Splats with bakegsplat", e)
+            if hou.isUIAvailable():
+                hou.ui.displayMessage(f"Failed to load native splats:\n{e}", severity=hou.severityType.Error)
 
 
     def _build_calibration_section(self):
@@ -6199,9 +6789,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.widget_disc_controls.setVisible(not is_room)
         if hasattr(self, 'widget_room_controls'):
             self.widget_room_controls.setVisible(is_room)
-        if not getattr(self, '_restoring_state', False):
-            if hasattr(self, 'grp_ground_proj') and not self.grp_ground_proj.isChecked():
-                self.grp_ground_proj.setChecked(True)
+        if not getattr(self, '_restoring_state', False) and not getattr(self, '_initializing', False):
             if is_room and hasattr(self, 'chk_snap_to_room'):
                 self.chk_snap_to_room.setChecked(True)
             if hasattr(self, '_sync_node'):
@@ -7002,10 +7590,15 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     self._hdri_orig_full.copy(), hdri_cs, "Linear"
                 )
 
-            # 2. Transform Plate thumbnail
+            # 2. Transform Plate thumbnail & full array
             if hasattr(self, '_plate_orig_thumb') and self._plate_orig_thumb is not None:
                 self._plate_thumb_raw = self._csm.transform_image(
                     self._plate_orig_thumb.copy(), plate_cs, "Linear"
+                )
+
+            if hasattr(self, '_plate_orig_full') and self._plate_orig_full is not None:
+                self._plate_full_array = self._csm.transform_image(
+                    self._plate_orig_full.copy(), plate_cs, "Linear"
                 )
 
             # 3. Refresh UI previews immediately
@@ -8204,11 +8797,28 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                             if changed or needs_wire:
                                 lookdev_node.cook(force=True)
                 elif lookdev_node is not None:
-                    lookdev_node.bypass(True)
+                    # Do not bypass if Splat Room Architecture has lookdev enabled!
+                    splat_arch_node = stage_node.node("splat_room_architecture")
+                    has_splat_ld = (splat_arch_node is not None and not splat_arch_node.isBypassed() and hasattr(self, 'chk_arch_snap_lookdev') and self.chk_arch_snap_lookdev.isChecked())
+                    if not has_splat_ld:
+                        lookdev_node.bypass(True)
+                    else:
+                        lookdev_node.bypass(False)
 
                 # 4. Ground & Room Projection Mesh (60 FPS real-time sync)
                 proj_node = stage_node.node("hdri_match_projection")
                 ground_proj_en = p.get("ground_proj_en", False)
+
+                # CRITICAL: If Splat Room Architecture is active, NEVER allow hdri_match_projection
+                # to build a duplicate room box at /environment/ground_dome!
+                splat_arch_node = stage_node.node("splat_room_architecture")
+                has_splat_arch = (splat_arch_node is not None and not splat_arch_node.isBypassed())
+                if has_splat_arch:
+                    ground_proj_en = False
+                    matlib_node = stage_node.node("hdri_match_materials")
+                    if matlib_node and stage_node.node("splatforge_materials"):
+                        matlib_node.bypass(True)
+
                 if ground_proj_en:
                     calibrated_path = getattr(self, '_current_calibrated_path', None)
                     if calibrated_path and os.path.isfile(calibrated_path):
@@ -9289,9 +9899,12 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 # Automatically bake / update ground projection with the calibrated HDRI texture
                 stage_node = self._get_stage_node()
                 ground_baked = False
+                has_splat_arch = (stage_node is not None and stage_node.node("splat_room_architecture") is not None and not stage_node.node("splat_room_architecture").isBypassed())
                 should_bake_ground = (
-                    (hasattr(self, 'grp_ground_proj') and self.grp_ground_proj.isChecked()) or
-                    (stage_node is not None and stage_node.node("hdri_match_projection") is not None)
+                    not has_splat_arch and (
+                        (hasattr(self, 'grp_ground_proj') and self.grp_ground_proj.isChecked()) or
+                        (stage_node is not None and stage_node.node("hdri_match_projection") is not None and not stage_node.node("hdri_match_projection").isBypassed())
+                    )
                 )
                 if should_bake_ground:
                     try:
@@ -10403,10 +11016,22 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 return
 
             h, w = arr.shape[:2]
-            target_h, target_w = 140, 240
-            y_idx = np.linspace(0, h - 1, target_h).astype(int)
-            x_idx = np.linspace(0, w - 1, target_w).astype(int)
-            self._hdri_orig_thumb = arr[y_idx][:, x_idx, :3].astype(np.float32)
+            target_h, target_w = 240, 480
+            try:
+                import cv2
+                thumb = cv2.resize(arr[..., :3], (target_w, target_h), interpolation=cv2.INTER_AREA)
+                self._hdri_orig_thumb = thumb.astype(np.float32)
+            except Exception:
+                try:
+                    from PIL import Image
+                    p_img = Image.fromarray(np.clip(arr[..., :3] * 255.0, 0, 255).astype(np.uint8))
+                    resample_filter = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+                    p_img = p_img.resize((target_w, target_h), resample_filter)
+                    self._hdri_orig_thumb = (np.array(p_img, dtype=np.float32) / 255.0)
+                except Exception:
+                    y_idx = np.linspace(0, h - 1, target_h).astype(int)
+                    x_idx = np.linspace(0, w - 1, target_w).astype(int)
+                    self._hdri_orig_thumb = arr[y_idx][:, x_idx, :3].astype(np.float32)
             self._hdri_orig_full = arr[..., :3].astype(np.float32)
             self._hdri_orig_shape = (w, h)
             self._apply_input_colorspace(notify_ui=False)
@@ -10479,6 +11104,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.lbl_plate_info.setText("---")
         self._plate_thumb_raw = None
         self._plate_orig_thumb = None
+        self._plate_full_array = None
+        self._plate_orig_full = None
+        self._plate_orig_shape = None
         self.reset_calibration(revert_reason="Plate removed")
         self._sync_node()
         self._save_state()
@@ -10562,12 +11190,17 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         path = _resolve_image_path(path)
         if not path or not os.path.isfile(path):
             had_plate = (getattr(self, "_plate_thumb_raw", None) is not None or
-                         getattr(self, "_plate_orig_thumb", None) is not None)
+                         getattr(self, "_plate_orig_thumb", None) is not None or
+                         getattr(self, "_plate_full_array", None) is not None or
+                         getattr(self, "_plate_orig_full", None) is not None)
             self.lbl_plate_preview.setText("No Plate loaded")
             self.lbl_single_plate.setText("No Plate loaded")
             self.lbl_plate_info.setText("---")
             self._plate_thumb_raw = None
             self._plate_orig_thumb = None
+            self._plate_full_array = None
+            self._plate_orig_full = None
+            self._plate_orig_shape = None
             self._update_all_previews()
             if had_plate and not getattr(self, "_restoring_state", False):
                 self.reset_calibration(revert_reason="Plate removed")
@@ -10575,18 +11208,44 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         try:
             self.log(f"Loading Target Plate: {path}...", "INFO")
-            from hdri_match.io.loader import load_exr_to_numpy
-            arr = load_exr_to_numpy(path)
+            arr = None
+            try:
+                from hdri_match.io.loader import load_exr_to_numpy
+                arr = load_exr_to_numpy(path)
+            except Exception:
+                pass
+            if arr is None:
+                try:
+                    from hdri_match_solaris.oiio_adapter import load_image_with_oiio
+                    arr = load_image_with_oiio(path)
+                except Exception:
+                    pass
             if arr is None:
                 self.log_error(f"Failed reading Plate array from {path}")
                 return
 
             h, w = arr.shape[:2]
-            target_h, target_w = 140, 240
-            y_idx = np.linspace(0, h - 1, target_h).astype(int)
-            x_idx = np.linspace(0, w - 1, target_w).astype(int)
-            self._plate_orig_thumb = arr[y_idx][:, x_idx, :3].astype(np.float32)
             self._plate_orig_shape = (w, h)
+            self._plate_orig_full = arr[..., :3].astype(np.float32)
+
+            # Generate high-quality anti-aliased thumbnail for dock widgets (480x270 or aspect-correct)
+            target_w = 480
+            target_h = max(1, int(round(target_w * (h / float(w)))))
+            try:
+                import cv2
+                thumb = cv2.resize(arr[..., :3], (target_w, target_h), interpolation=cv2.INTER_AREA)
+                self._plate_orig_thumb = thumb.astype(np.float32)
+            except Exception:
+                try:
+                    from PIL import Image
+                    p_img = Image.fromarray(np.clip(arr[..., :3] * 255.0, 0, 255).astype(np.uint8))
+                    resample_filter = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+                    p_img = p_img.resize((target_w, target_h), resample_filter)
+                    self._plate_orig_thumb = (np.array(p_img, dtype=np.float32) / 255.0)
+                except Exception:
+                    y_idx = np.linspace(0, h - 1, target_h).astype(int)
+                    x_idx = np.linspace(0, w - 1, target_w).astype(int)
+                    self._plate_orig_thumb = arr[y_idx][:, x_idx, :3].astype(np.float32)
 
             # Auto-suggest plate color space based on file format if not restoring existing state
             if hasattr(self, 'combo_plate_cs') and not getattr(self, '_restoring_state', False):
@@ -10702,13 +11361,21 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             norm = getattr(self, '_hdri_base_norm', None)
             if norm is None:
                 base_luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-                p98 = float(np.percentile(base_luma, 98))
+                if base_luma.size > 200000:
+                    step = int(math.ceil(math.sqrt(base_luma.size / 100000.0)))
+                    p98 = float(np.percentile(base_luma[::step, ::step], 98))
+                else:
+                    p98 = float(np.percentile(base_luma, 98))
                 norm = (0.9 / max(1e-5, p98))
             img *= norm
         else:
             # Neutral reference tone-mapping
             luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-            p98 = float(np.percentile(luma, 98))
+            if luma.size > 200000:
+                step = int(math.ceil(math.sqrt(luma.size / 100000.0)))
+                p98 = float(np.percentile(luma[::step, ::step], 98))
+            else:
+                p98 = float(np.percentile(luma, 98))
             if p98 > 1e-6:
                 img *= (0.9 / p98)
 
@@ -10777,32 +11444,28 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.lbl_single_plate.setText("No Plate loaded")
 
         # 2. Update Split Wipe preview
-        if hdri_u8 is not None or plate_u8 is not None:
+        if pix_h is not None or pix_p is not None:
             ratio = self.sld_wipe.value() / 100.0
             self.lbl_wipe_ratio.setText(f"{int(ratio*100)}% | {int((1.0-ratio)*100)}%")
             tw, th = 340, 130
-            canvas = np.zeros((th, tw, 3), dtype=np.uint8)
+            canvas = QtGui.QPixmap(tw, th)
+            canvas.fill(QtCore.Qt.black)
+            painter = QtGui.QPainter(canvas)
             split_x = int(ratio * tw)
 
-            if hdri_u8 is not None:
-                y_idx = np.linspace(0, hdri_u8.shape[0] - 1, th).astype(int)
-                x_idx = np.linspace(0, hdri_u8.shape[1] - 1, tw).astype(int)
-                h_res = hdri_u8[y_idx][:, x_idx]
-                canvas[:, :split_x] = h_res[:, :split_x]
+            if pix_h is not None:
+                h_scaled = pix_h.scaled(tw, th, QtCore.Qt.IgnoreAspectRatio, QtCore.Qt.SmoothTransformation)
+                painter.drawPixmap(0, 0, split_x, th, h_scaled, 0, 0, split_x, th)
+            if pix_p is not None:
+                p_scaled = pix_p.scaled(tw, th, QtCore.Qt.IgnoreAspectRatio, QtCore.Qt.SmoothTransformation)
+                painter.drawPixmap(split_x, 0, tw - split_x, th, p_scaled, split_x, 0, tw - split_x, th)
 
-            if plate_u8 is not None:
-                y_idx = np.linspace(0, plate_u8.shape[0] - 1, th).astype(int)
-                x_idx = np.linspace(0, plate_u8.shape[1] - 1, tw).astype(int)
-                p_res = plate_u8[y_idx][:, x_idx]
-                canvas[:, split_x:] = p_res[:, split_x:]
-
-            # Draw vertical amber divider line
             if 0 < split_x < tw:
-                canvas[:, max(0, split_x - 1):min(tw, split_x + 1)] = [255, 170, 0]
+                painter.setPen(QtGui.QPen(QtGui.QColor(255, 170, 0), 2))
+                painter.drawLine(split_x, 0, split_x, th)
 
-            pix_w = self._arr_to_pixmap(canvas)
-            if pix_w:
-                self.lbl_wipe_preview.setPixmap(pix_w)
+            painter.end()
+            self.lbl_wipe_preview.setPixmap(canvas)
         else:
             self.lbl_wipe_preview.setText("Load HDRI and Plate for Split Wipe")
 
@@ -13635,7 +14298,7 @@ def _gen_ground_projection_code(p):
             '',
             'def apply_surface_attrs(prim):',
             '    """Apply shadow, emissive, and render visibility attributes to a room mesh prim if changed."""',
-            '    target_karma_vis = "* ^primary ^shadow" if (room_invisible and not room_shadows) else ("* ^primary" if room_invisible else ("* ^shadow" if not room_shadows else "*"))',
+            '    target_karma_vis = "diffuse reflect refract" if (room_invisible and not room_shadows) else ("diffuse reflect refract shadow" if room_invisible else ("primary diffuse reflect refract" if not room_shadows else "*"))',
             '    cur_k_vis = prim.GetAttribute("primvars:karma:object:rendervisibility").Get() if prim.HasAttribute("primvars:karma:object:rendervisibility") else None',
             '    if cur_k_vis != target_karma_vis:',
             '        prim.CreateAttribute("primvars:karma:object:rendervisibility", Sdf.ValueTypeNames.String, False).Set(target_karma_vis)',
@@ -13653,8 +14316,8 @@ def _gen_ground_projection_code(p):
             '    if cur_shd != target_shd:',
             '        prim.CreateAttribute("primvars:arnold:visibility:shadow", Sdf.ValueTypeNames.Bool, False).Set(target_shd)',
             '        prim.CreateAttribute("arnold:visibility:shadow", Sdf.ValueTypeNames.Int, False).Set(1 if target_shd else 0)',
-            '        prim.CreateAttribute("primvars:arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(target_shd)',
-            '        prim.CreateAttribute("arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(target_shd)',
+            '        prim.CreateAttribute("primvars:arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
+            '        prim.CreateAttribute("arnold:opaque", Sdf.ValueTypeNames.Bool, False).Set(True)',
             '        prim.CreateAttribute("primvars:redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(target_shd)',
             '        prim.CreateAttribute("redshift:object:MESHFLAG_SHADOWCASTER", Sdf.ValueTypeNames.Bool, False).Set(target_shd)',
             '    if mat_mode_val in ("emissive", "pbr_emissive"):',

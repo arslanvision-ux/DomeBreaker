@@ -536,14 +536,16 @@ if stage:
         ch = _build_smooth_sphere(stage, f"{{root}}/spheres/chrome_sphere", eff_radius)
         xf_ch = UsdGeom.Xformable(ch.GetPrim())
         xf_ch.ClearXformOpOrder()
-        xf_ch.AddTranslateOp().Set(Gf.Vec3d(pos_x - eff_spacing * 0.5, eff_ball_y, pos_z))
+        ch_x = pos_x - eff_spacing if include_white else pos_x - eff_spacing * 0.5
+        xf_ch.AddTranslateOp().Set(Gf.Vec3d(ch_x, eff_ball_y, pos_z))
         UsdShade.MaterialBindingAPI.Apply(ch.GetPrim()).Bind(c_mtl)
 
         # Grey Ball
         gr = _build_smooth_sphere(stage, f"{{root}}/spheres/grey_sphere", eff_radius)
         xf_gr = UsdGeom.Xformable(gr.GetPrim())
         xf_gr.ClearXformOpOrder()
-        xf_gr.AddTranslateOp().Set(Gf.Vec3d(pos_x + eff_spacing * 0.5, eff_ball_y, pos_z))
+        gr_x = pos_x if include_white else pos_x + eff_spacing * 0.5
+        xf_gr.AddTranslateOp().Set(Gf.Vec3d(gr_x, eff_ball_y, pos_z))
         UsdShade.MaterialBindingAPI.Apply(gr.GetPrim()).Bind(g_mtl)
 
         # White Ball
@@ -551,7 +553,8 @@ if stage:
             wh = _build_smooth_sphere(stage, f"{{root}}/spheres/white_sphere", eff_radius)
             xf_wh = UsdGeom.Xformable(wh.GetPrim())
             xf_wh.ClearXformOpOrder()
-            xf_wh.AddTranslateOp().Set(Gf.Vec3d(pos_x + eff_spacing * 1.5, eff_ball_y, pos_z))
+            wh_x = pos_x + eff_spacing
+            xf_wh.AddTranslateOp().Set(Gf.Vec3d(wh_x, eff_ball_y, pos_z))
             UsdShade.MaterialBindingAPI.Apply(wh.GetPrim()).Bind(w_mtl)
         elif stage.GetPrimAtPath(f"{{root}}/spheres/white_sphere").IsValid():
             stage.RemovePrim(f"{{root}}/spheres/white_sphere")
@@ -599,8 +602,8 @@ if stage:
                         stage.RemovePrim(f"{{root}}/stand/{{sp}}")
 
             # Horizontal Crossbar
-            cbar_len = eff_spacing * (3.2 if include_white else 2.2)
-            cbar_cx = pos_x + (eff_spacing * 0.5 if include_white else 0.0)
+            cbar_len = eff_spacing * (2.8 if include_white else 2.2)
+            cbar_cx = pos_x
             cbar = UsdGeom.Cylinder.Define(stage, f"{{root}}/stand/crossbar")
             cbar.GetRadiusAttr().Set(max(0.006, 0.012 * rig_scale))
             cbar.GetHeightAttr().Set(cbar_len)
@@ -620,7 +623,7 @@ if stage:
             card_xform = UsdGeom.Xform.Define(stage, card_path)
             xf_cd = UsdGeom.Xformable(card_xform.GetPrim())
             xf_cd.ClearXformOpOrder()
-            chart_cx = pos_x + (eff_spacing * 0.5 if include_white else 0.0)
+            chart_cx = pos_x
             chart_cy = crossbar_y - eff_radius * 0.9
             xf_cd.AddTranslateOp().Set(Gf.Vec3d(chart_cx, chart_cy, pos_z + 0.02 * rig_scale))
             xf_cd.AddRotateXOp().Set(-8.0)

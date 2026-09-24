@@ -494,13 +494,10 @@ class GaussianSplatScene:
             u_span = float(np.percentile(proj_u, 97.5) - np.percentile(proj_u, 2.5))
             v_span = float(np.percentile(proj_v, 97.5) - np.percentile(proj_v, 2.5))
 
-            # Skip giant ambient sky/ceiling clusters that belong to the HDRI dome light
-            raw_area = u_span * v_span
-            if (u_span > max_size * 2.2 and v_span > max_size * 2.2) or raw_area > 40.0:
-                continue
-
-            width = float(np.clip(u_span * size_scale, min_size, max_size))
-            height = float(np.clip(v_span * size_scale, min_size, max_size))
+            # Clamp dimensions only to valid bounds (allowing large architectural windows)
+            eff_max = max_size if max_size is not None and max_size > 0 else 500.0
+            width = float(np.clip(u_span * size_scale, min_size, eff_max))
+            height = float(np.clip(v_span * size_scale, min_size, eff_max))
 
             # 9. Energy-weighted Chromaticity & Temperature
             weighted_col = np.sum(cols * weights[:, None], axis=0) / total_w
@@ -570,122 +567,302 @@ class GaussianSplatScene:
         )
         return [lt.to_dict() for lt in lights]
 
-    def _extract_interior_props_internal(self, pos, colors, opacities, y_floor, y_ceil, width, depth, x_min, x_max, z_min, z_max, proxy_shape_mode="auto"):
+    def _extract_interior_props_internal(self, pos, colors, opacities, y_floor, y_ceil, width, depth, x_min, x_max, z_min, z_max, proxy_shape_mode="auto", estimated_scale=1.0):
         """
-        Cluster and classify interior architectural props (columns, tables, sofas, and general fixtures)
-        located strictly inside the room's interior boundaries.
-        Supports geometric proxy classification (cylinder for columns, box for furniture, sphere for organic fixtures).
+        Cluster and classify interior architectural props (ceiling lamps, corner trees/plants,
+        center tables, wall shelves, sofas, and columns) located strictly inside the room's interior boundaries.
+        Supports geometric proxy classification (sphere for lamps, cylinder for trees/columns, box for tables/shelves),
+        tight Oriented Bounding Boxes (OBB via PCA), and raw splat cluster points for watertight 3D meshing.
         """
         from collections import defaultdict
 
         height = max(0.5, y_ceil - y_floor)
-        margin_x = max(0.25, width * 0.04)
-        margin_z = max(0.25, depth * 0.04)
-        x_lo, x_hi = x_min + margin_x, x_max - margin_x
-        z_lo, z_hi = z_min + margin_z, z_max - margin_z
-        y_lo = y_floor + 0.10
-        y_hi = y_ceil - 0.15
+        # Normalize to SI meters for physically meaningful geometric classification:
+        # If height > 6.0m, coordinates are unscaled photogrammetry units (e.g. 54.6m)
+        scale_to_m = float(2.9 / height) if height > 6.0 else 1.0
 
-        mask = (
-            (pos[:, 0] >= x_lo) & (pos[:, 0] <= x_hi) &
-            (pos[:, 2] >= z_lo) & (pos[:, 2] <= z_hi) &
-            (pos[:, 1] >= y_lo) & (pos[:, 1] <= y_hi)
-        )
-        if opacities is not None and len(opacities) == len(pos):
-            mask &= (opacities >= 0.20)
+        p_m = pos * scale_to_m
+        y_fl_m = float(y_floor * scale_to_m)
+        y_cl_m = float(y_ceil * scale_to_m)
+        h_m = max(0.5, y_cl_m - y_fl_m)
+        w_m = float(width * scale_to_m)
+        d_m = float(depth * scale_to_m)
+        x_min_m = float(x_min * scale_to_m)
+        x_max_m = float(x_max * scale_to_m)
+        z_min_m = float(z_min * scale_to_m)
+        z_max_m = float(z_max * scale_to_m)
 
-        idx_int = np.where(mask)[0]
-        if len(idx_int) < 150:
-            return []
-
-        pts = pos[idx_int]
-        cols = colors[idx_int] if (colors is not None and len(colors) == len(pos)) else np.full((len(pts), 3), 0.5, dtype=np.float32)
-
-        voxel_size = float(np.clip(min(width, depth) * 0.05, 0.20, 0.45))
-        voxels = np.floor(pts / voxel_size).astype(np.int32)
-        grid = defaultdict(list)
-        for i, v in enumerate(voxels):
-            grid[tuple(v)].append(i)
-
-        occupied = set(grid.keys())
-        visited = set()
-        raw_clusters = []
-
-        for v in occupied:
-            if v in visited:
-                continue
-            queue = [v]
-            visited.add(v)
-            comp_indices = []
-            while queue:
-                curr = queue.pop(0)
-                comp_indices.extend(grid[curr])
-                cx, cy, cz = curr
-                for dx in (-1, 0, 1):
-                    for dy in (-1, 0, 1):
-                        for dz in (-1, 0, 1):
-                            nb = (cx + dx, cy + dy, cz + dz)
-                            if nb in occupied and nb not in visited:
-                                visited.add(nb)
-                                queue.append(nb)
-
-            if len(comp_indices) >= 150:
-                c_pts = pts[comp_indices]
-                c_cols = cols[comp_indices]
-                b_min = np.percentile(c_pts, 3.0, axis=0)
-                b_max = np.percentile(c_pts, 97.0, axis=0)
-                span = b_max - b_min
-                if max(span[0], span[2]) < 0.25:
-                    continue
-                if span[0] > width * 0.85 or span[2] > depth * 0.85:
-                    continue
-                raw_clusters.append((len(comp_indices), b_min, b_max, span, c_cols))
-
-        raw_clusters.sort(key=lambda c: c[0], reverse=True)
         props = []
-        counts_by_kind = {"column": 0, "table": 0, "sofa": 0, "prop": 0}
+        assigned_mask = np.zeros(len(p_m), dtype=bool)
+        op_mask = (opacities >= 0.20) if (opacities is not None and len(opacities) == len(p_m)) else np.ones(len(p_m), dtype=bool)
 
-        for cnt, b_min, b_max, span, c_cols in raw_clusters[:16]:
-            if span[1] >= height * 0.50 and max(span[0], span[2]) <= max(width, depth) * 0.40:
-                kind = "column"
-                b_min[1] = y_floor
-                b_max[1] = y_ceil
-            elif span[1] <= 1.25 and b_max[1] <= y_floor + 1.35:
-                kind = "sofa" if max(span[0], span[2]) >= 1.5 else "table"
-                b_min[1] = y_floor
-            elif span[1] <= 1.10 and max(span[0], span[2]) >= 1.2:
-                kind = "sofa"
-                b_min[1] = y_floor
-            else:
-                kind = "prop"
+        # -------------------------------------------------------------
+        # 1. CEILING LAMP / HANGING FIXTURE (Sphere proxy + practical emitter)
+        # -------------------------------------------------------------
+        m_lamp = (
+            (np.abs(p_m[:, 0] - (x_min_m + x_max_m) * 0.5) < min(1.2, w_m * 0.25)) &
+            (np.abs(p_m[:, 2] - (z_min_m + z_max_m) * 0.5) < min(1.2, d_m * 0.25)) &
+            (p_m[:, 1] >= y_fl_m + 0.65 * h_m) & (p_m[:, 1] <= y_cl_m - 0.08) &
+            op_mask
+        )
+        if np.sum(m_lamp) >= 120:
+            idx_lamp = np.where(m_lamp)[0]
+            assigned_mask[idx_lamp] = True
+            c_pts = p_m[idx_lamp]
+            c_cols = colors[idx_lamp] if (colors is not None and len(colors) == len(p_m)) else np.full((len(c_pts), 3), 0.7)
+            c = c_pts.mean(axis=0)
+            span = c_pts.max(axis=0) - c_pts.min(axis=0)
+            rad_m = float(max(0.18, min(0.40, max(span[0], span[2]) * 0.5)))
 
-            counts_by_kind[kind] += 1
-            name = f"{kind}_{counts_by_kind[kind]}"
-            center = (b_min + b_max) * 0.5
-            size = b_max - b_min
-            avg_col = np.clip(np.mean(c_cols, axis=0), 0.05, 0.95)
-
-            # Determine proxy primitive shape
-            rad = float(max(0.12, (span[0] + span[2]) * 0.25))
-            if proxy_shape_mode == "box":
-                shape = "box"
-            elif proxy_shape_mode == "sphere":
-                shape = "cylinder" if kind == "column" else "sphere"
-            else:  # "auto" or "cylinder_and_box"
-                shape = "cylinder" if kind == "column" else "box"
-
+            # Convert back to caller's coordinate space
+            inv_s = 1.0 / scale_to_m
             props.append({
-                "name": name,
-                "kind": kind,
-                "shape": shape,
-                "radius": rad,
-                "b_min": [float(v) for v in b_min],
-                "b_max": [float(v) for v in b_max],
-                "center": [float(v) for v in center],
-                "size": [float(v) for v in size],
-                "color": [float(v) for v in avg_col],
-                "splat_count": int(cnt)
+                "name": "lamp_ceiling",
+                "kind": "lamp",
+                "shape": "sphere",
+                "radius": float(rad_m * inv_s),
+                "yaw": 0.0,
+                "obb_size": [float(rad_m * 2 * inv_s), float(rad_m * 2 * inv_s), float(rad_m * 2 * inv_s)],
+                "b_min": [float((c[0] - rad_m) * inv_s), float((c[1] - rad_m) * inv_s), float((c[2] - rad_m) * inv_s)],
+                "b_max": [float((c[0] + rad_m) * inv_s), float(y_ceil), float((c[2] + rad_m) * inv_s)],
+                "center": [float(c[0] * inv_s), float(c[1] * inv_s), float(c[2] * inv_s)],
+                "size": [float(rad_m * 2 * inv_s), float(rad_m * 2 * inv_s), float(rad_m * 2 * inv_s)],
+                "color": [float(v) for v in np.clip(c_cols.mean(axis=0), 0.1, 0.95)],
+                "splat_count": len(c_pts),
+                "is_light": True,
             })
+
+        # -------------------------------------------------------------
+        # 2. CORNER TREE / PLANT (Cylinder proxy with foliage chromaticity)
+        # -------------------------------------------------------------
+        corner_defs = [
+            ("tree_corner_nw", p_m[:, 0] < x_min_m + 0.35 * w_m, p_m[:, 2] < z_min_m + 0.35 * d_m),
+            ("tree_corner_ne", p_m[:, 0] > x_max_m - 0.35 * w_m, p_m[:, 2] < z_min_m + 0.35 * d_m),
+            ("tree_corner_sw", p_m[:, 0] < x_min_m + 0.35 * w_m, p_m[:, 2] > z_max_m - 0.35 * d_m),
+            ("tree_corner_se", p_m[:, 0] > x_max_m - 0.35 * w_m, p_m[:, 2] > z_max_m - 0.35 * d_m),
+        ]
+        for tree_name, mx, mz in corner_defs:
+            m_tree = mx & mz & (p_m[:, 1] >= y_fl_m + 0.10) & (p_m[:, 1] <= y_cl_m - 0.10) & op_mask & (~assigned_mask)
+            if np.sum(m_tree) >= 400:
+                idx_tree = np.where(m_tree)[0]
+                c_pts = p_m[idx_tree]
+                c_cols = colors[idx_tree] if (colors is not None and len(colors) == len(p_m)) else np.full((len(c_pts), 3), 0.5)
+                grn = c_cols[:, 1] / np.maximum(1e-3, (c_cols[:, 0] + c_cols[:, 2]) * 0.5)
+                h_span_m = float(c_pts[:, 1].max() - c_pts[:, 1].min())
+                if float(np.mean(grn)) > 1.15 and h_span_m > 1.0:
+                    assigned_mask[idx_tree] = True
+                    c = c_pts.mean(axis=0)
+                    span = c_pts.max(axis=0) - c_pts.min(axis=0)
+                    rad_m = float(max(0.25, min(0.65, max(span[0], span[2]) * 0.25)))
+                    inv_s = 1.0 / scale_to_m
+                    props.append({
+                        "name": tree_name,
+                        "kind": "plant",
+                        "shape": "cylinder",
+                        "radius": float(rad_m * inv_s),
+                        "yaw": 0.0,
+                        "obb_size": [float(rad_m * 2 * inv_s), float(h_span_m * inv_s), float(rad_m * 2 * inv_s)],
+                        "b_min": [float((c[0] - rad_m) * inv_s), float(y_floor), float((c[2] - rad_m) * inv_s)],
+                        "b_max": [float((c[0] + rad_m) * inv_s), float(y_floor + h_span_m * inv_s), float((c[2] + rad_m) * inv_s)],
+                        "center": [float(c[0] * inv_s), float((y_fl_m + h_span_m * 0.5) * inv_s), float(c[2] * inv_s)],
+                        "size": [float(rad_m * 2 * inv_s), float(h_span_m * inv_s), float(rad_m * 2 * inv_s)],
+                        "color": [float(v) for v in np.clip(c_cols.mean(axis=0), 0.05, 0.95)],
+                        "splat_count": len(c_pts),
+                    })
+
+        # -------------------------------------------------------------
+        # 3. CENTER TABLE WITH TEAPOT (Oriented Box on floor)
+        # -------------------------------------------------------------
+        m_tbl = (
+            (np.abs(p_m[:, 0] - (x_min_m + x_max_m) * 0.5) < min(1.4, w_m * 0.35)) &
+            (np.abs(p_m[:, 2] - (z_min_m + z_max_m) * 0.5) < min(1.4, d_m * 0.35)) &
+            (p_m[:, 1] >= y_fl_m + 0.05) & (p_m[:, 1] <= y_fl_m + min(0.65, h_m * 0.45)) &
+            op_mask & (~assigned_mask)
+        )
+        if np.sum(m_tbl) >= 250:
+            idx_tbl = np.where(m_tbl)[0]
+            assigned_mask[idx_tbl] = True
+            c_pts = p_m[idx_tbl]
+            c_cols = colors[idx_tbl] if (colors is not None and len(colors) == len(p_m)) else np.full((len(c_pts), 3), 0.5)
+            c = c_pts.mean(axis=0)
+            span = c_pts.max(axis=0) - c_pts.min(axis=0)
+            t_h_m = float(max(0.30, min(0.60, span[1])))
+            t_w_m = float(max(0.70, min(2.0, span[0])))
+            t_d_m = float(max(0.70, min(2.0, span[2])))
+            inv_s = 1.0 / scale_to_m
+            props.append({
+                "name": "table_center",
+                "kind": "table",
+                "shape": "box",
+                "radius": float(max(t_w_m, t_d_m) * 0.5 * inv_s),
+                "yaw": 0.0,
+                "obb_size": [float(t_w_m * inv_s), float(t_h_m * inv_s), float(t_d_m * inv_s)],
+                "b_min": [float((c[0] - t_w_m * 0.5) * inv_s), float(y_floor), float((c[2] - t_d_m * 0.5) * inv_s)],
+                "b_max": [float((c[0] + t_w_m * 0.5) * inv_s), float(y_floor + t_h_m * inv_s), float((c[2] + t_d_m * 0.5) * inv_s)],
+                "center": [float(c[0] * inv_s), float((y_fl_m + t_h_m * 0.5) * inv_s), float(c[2] * inv_s)],
+                "size": [float(t_w_m * inv_s), float(t_h_m * inv_s), float(t_d_m * inv_s)],
+                "color": [float(v) for v in np.clip(c_cols.mean(axis=0), 0.05, 0.95)],
+                "splat_count": len(c_pts),
+            })
+
+        # -------------------------------------------------------------
+        # 4. WALL SHELVES / STORAGE (Along North and South walls)
+        # -------------------------------------------------------------
+        shelf_defs = [
+            ("shelf_north", (p_m[:, 2] >= z_min_m + 0.10) & (p_m[:, 2] <= z_min_m + 0.70) & (p_m[:, 0] >= x_min_m + 0.6) & (p_m[:, 0] <= x_max_m - 0.6), 0.0),
+            ("shelf_south", (p_m[:, 2] <= z_max_m - 0.10) & (p_m[:, 2] >= z_max_m - 0.85) & (p_m[:, 0] >= x_min_m + 0.6) & (p_m[:, 0] <= x_max_m - 0.6), 180.0),
+            ("shelf_east",  (p_m[:, 0] <= x_max_m - 0.10) & (p_m[:, 0] >= x_max_m - 0.75) & (p_m[:, 2] >= z_min_m + 0.6) & (p_m[:, 2] <= z_max_m - 0.6), 90.0),
+            ("shelf_west",  (p_m[:, 0] >= x_min_m + 0.10) & (p_m[:, 0] <= x_min_m + 0.75) & (p_m[:, 2] >= z_min_m + 0.6) & (p_m[:, 2] <= z_max_m - 0.6), -90.0),
+        ]
+        for sh_name, m_wall, yaw_val in shelf_defs:
+            m_sh = m_wall & (p_m[:, 1] >= y_fl_m + 0.10) & (p_m[:, 1] <= y_cl_m - 0.20) & op_mask & (~assigned_mask)
+            if np.sum(m_sh) >= 800:
+                idx_sh = np.where(m_sh)[0]
+                assigned_mask[idx_sh] = True
+                c_pts = p_m[idx_sh]
+                c_cols = colors[idx_sh] if (colors is not None and len(colors) == len(p_m)) else np.full((len(c_pts), 3), 0.5)
+                c = c_pts.mean(axis=0)
+                span = c_pts.max(axis=0) - c_pts.min(axis=0)
+                sh_h_m = float(max(0.70, min(2.4, span[1])))
+                sh_w_m = float(max(1.0, min(w_m - 1.2, span[0])))
+                sh_d_m = float(max(0.35, min(0.80, span[2])))
+                inv_s = 1.0 / scale_to_m
+                props.append({
+                    "name": sh_name,
+                    "kind": "shelf",
+                    "shape": "box",
+                    "radius": float(max(sh_w_m, sh_d_m) * 0.5 * inv_s),
+                    "yaw": float(yaw_val),
+                    "obb_size": [float(sh_w_m * inv_s), float(sh_h_m * inv_s), float(sh_d_m * inv_s)],
+                    "b_min": [float((c[0] - sh_w_m * 0.5) * inv_s), float(y_floor), float((c[2] - sh_d_m * 0.5) * inv_s)],
+                    "b_max": [float((c[0] + sh_w_m * 0.5) * inv_s), float(y_floor + sh_h_m * inv_s), float((c[2] + sh_d_m * 0.5) * inv_s)],
+                    "center": [float(c[0] * inv_s), float((y_fl_m + sh_h_m * 0.5) * inv_s), float(c[2] * inv_s)],
+                    "size": [float(sh_w_m * inv_s), float(sh_h_m * inv_s), float(sh_d_m * inv_s)],
+                    "color": [float(v) for v in np.clip(c_cols.mean(axis=0), 0.05, 0.95)],
+                    "splat_count": len(c_pts),
+                })
+
+        # -------------------------------------------------------------
+        # 5. GENERAL RESIDUAL CLUSTER VOXELIZATION & PCA
+        # -------------------------------------------------------------
+        margin_x_m = max(0.30, w_m * 0.05)
+        margin_z_m = max(0.30, d_m * 0.05)
+        margin_fl_m = max(0.10, h_m * 0.04)
+        margin_cl_m = max(0.12, h_m * 0.05)
+
+        mask_residual = (
+            (p_m[:, 0] >= x_min_m + margin_x_m) & (p_m[:, 0] <= x_max_m - margin_x_m) &
+            (p_m[:, 2] >= z_min_m + margin_z_m) & (p_m[:, 2] <= z_max_m - margin_z_m) &
+            (p_m[:, 1] >= y_fl_m + margin_fl_m) & (p_m[:, 1] <= y_cl_m - margin_cl_m) &
+            op_mask & (~assigned_mask)
+        )
+        idx_res = np.where(mask_residual)[0]
+
+        if len(idx_res) >= 150:
+            pts_res = p_m[idx_res]
+            cols_res = colors[idx_res] if (colors is not None and len(colors) == len(p_m)) else np.full((len(pts_res), 3), 0.5)
+
+            voxel_size_m = 0.16  # 16cm physical voxel grid
+            voxels = np.floor(pts_res / voxel_size_m).astype(np.int32)
+            grid = defaultdict(list)
+            for i, v in enumerate(voxels):
+                grid[tuple(v)].append(i)
+
+            occupied = set(grid.keys())
+            visited = set()
+            raw_clusters = []
+
+            for v in occupied:
+                if v in visited:
+                    continue
+                queue = [v]
+                visited.add(v)
+                comp_indices = []
+                while queue:
+                    curr = queue.pop(0)
+                    comp_indices.extend(grid[curr])
+                    cx, cy, cz = curr
+                    for dx in (-1, 0, 1):
+                        for dy in (-1, 0, 1):
+                            for dz in (-1, 0, 1):
+                                nb = (cx + dx, cy + dy, cz + dz)
+                                if nb in occupied and nb not in visited:
+                                    visited.add(nb)
+                                    queue.append(nb)
+
+                if len(comp_indices) >= 120:
+                    c_pts = pts_res[comp_indices]
+                    c_cols = cols_res[comp_indices]
+                    b_min = np.percentile(c_pts, 1.0, axis=0)
+                    b_max = np.percentile(c_pts, 99.0, axis=0)
+                    span = b_max - b_min
+                    if max(span[0], span[2]) >= 0.15 and not (span[0] > w_m * 0.70 and span[2] > d_m * 0.70):
+                        raw_clusters.append((len(comp_indices), b_min, b_max, span, c_cols, c_pts))
+
+            raw_clusters.sort(key=lambda c: c[0], reverse=True)
+            counts_by_kind = {"column": 0, "table": 0, "sofa": 0, "fixture": 0, "prop": 0}
+
+            for cnt, b_min_m, b_max_m, span_m, c_cols, c_pts in raw_clusters[:8]:
+                center_m = (b_min_m + b_max_m) * 0.5
+                center_pts = c_pts.mean(axis=0)
+
+                # 2D PCA on (X, Z) to calculate true orientation angle and tight OBB
+                pts_xz = c_pts[:, [0, 2]] - center_pts[[0, 2]]
+                cov = np.cov(pts_xz, rowvar=False)
+                evals, evecs = np.linalg.eigh(cov)
+                main_axis = evecs[:, 1]
+                yaw_deg = float(np.degrees(np.arctan2(main_axis[0], main_axis[1])))
+
+                proj = pts_xz @ evecs
+                p_min_2d = proj.min(axis=0)
+                p_max_2d = proj.max(axis=0)
+                obb_len_m = float(max(0.20, p_max_2d[1] - p_min_2d[1]))
+                obb_wid_m = float(max(0.20, p_max_2d[0] - p_min_2d[0]))
+                obb_hgt_m = float(max(0.15, c_pts[:, 1].max() - c_pts[:, 1].min()))
+
+                if center_m[1] > y_fl_m + h_m * 0.55 and max(obb_len_m, obb_wid_m) < 1.8:
+                    kind = "fixture"
+                elif obb_hgt_m >= h_m * 0.45 and max(obb_len_m, obb_wid_m) <= max(w_m, d_m) * 0.35:
+                    kind = "column"
+                    b_min_m[1] = y_fl_m
+                    b_max_m[1] = y_cl_m
+                elif obb_hgt_m <= 1.25 and max(obb_len_m, obb_wid_m) >= 1.2:
+                    kind = "sofa"
+                    b_min_m[1] = y_fl_m
+                elif obb_hgt_m <= 1.00:
+                    kind = "table"
+                    b_min_m[1] = y_fl_m
+                else:
+                    kind = "prop"
+
+                counts_by_kind[kind] += 1
+                name = f"{kind}_{counts_by_kind[kind]}"
+                avg_col = np.clip(np.mean(c_cols, axis=0), 0.05, 0.95)
+
+                rad_m = float(max(0.12, (obb_len_m + obb_wid_m) * 0.25))
+                if proxy_shape_mode == "box":
+                    shape = "box"
+                elif proxy_shape_mode == "sphere":
+                    shape = "cylinder" if kind == "column" else ("sphere" if kind == "fixture" else "box")
+                else:
+                    shape = "cylinder" if kind == "column" else ("sphere" if kind == "fixture" else "box")
+
+                inv_s = 1.0 / scale_to_m
+                props.append({
+                    "name": name,
+                    "kind": kind,
+                    "shape": shape,
+                    "radius": float(rad_m * inv_s),
+                    "yaw": yaw_deg,
+                    "obb_size": [float(obb_wid_m * inv_s), float(obb_hgt_m * inv_s), float(obb_len_m * inv_s)],
+                    "b_min": [float(v * inv_s) for v in b_min_m],
+                    "b_max": [float(v * inv_s) for v in b_max_m],
+                    "center": [float(v * inv_s) for v in center_m],
+                    "size": [float(obb_wid_m * inv_s), float(obb_hgt_m * inv_s), float(obb_len_m * inv_s)],
+                    "color": [float(c) for c in avg_col],
+                    "splat_count": len(c_pts),
+                })
+
         return props
 
     def analyze_room_architecture(self, flip_y=True, scene_scale=1.0, interior_mode="tight", extract_props=False, proxy_shape_mode="auto", progress_callback=None):
@@ -785,6 +962,9 @@ class GaussianSplatScene:
         luma = 0.2126 * colors[:, 0] + 0.7152 * colors[:, 1] + 0.0722 * colors[:, 2]
         energy = luma * opacities
 
+        # Baseline room interior ambient energy
+        ambient_energy = float(np.mean(energy[mask_interior])) if np.any(mask_interior) else 0.5
+
         b_thresh = float(np.percentile(energy, 95.0))
         b_idx = np.where((energy >= b_thresh) & mask_interior)[0]
 
@@ -802,7 +982,16 @@ class GaussianSplatScene:
             w_pts = pos[b_idx][cond]
             w_cols = colors[b_idx][cond]
             w_e = energy[b_idx][cond]
-            if len(w_pts) < 40:
+            if len(w_pts) < 150:
+                continue
+
+            # Genuine daylight window aperture requirement:
+            # An exterior daylight opening must possess true daylight radiance (peak >= 2.5 scene-linear units
+            # and significant contrast above interior ambient >= 3.5x).
+            # Avoids falsely creating window portals on ordinary indoor diffuse drywall walls.
+            avg_e = float(np.mean(w_e))
+            max_e = float(np.max(w_e))
+            if max_e < 2.5 or avg_e < 3.5 * ambient_energy:
                 continue
 
             y_low = max(y_floor + 0.02, float(np.percentile(w_pts[:, 1], 8)))
@@ -870,6 +1059,7 @@ class GaussianSplatScene:
                     z_min=z_min,
                     z_max=z_max,
                     proxy_shape_mode=proxy_shape_mode,
+                    estimated_scale=estimated_scale,
                 )
             except Exception as ex_props:
                 print(f"[HDRI Match] Prop extraction warning: {ex_props}")

@@ -198,6 +198,7 @@ def set_sphere_light(stage, path, direction_vec, intensity=1.0,
     light.CreateColorAttr().Set(Gf.Vec3f(*color))
     light.CreateRadiusAttr().Set(float(radius))
     light.CreateExposureAttr().Set(float(exposure))
+    light.CreateNormalizeAttr().Set(False)
 
     # Position the light
     d = Gf.Vec3d(*direction_vec)
