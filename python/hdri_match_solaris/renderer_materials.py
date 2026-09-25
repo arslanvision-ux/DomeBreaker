@@ -459,9 +459,9 @@ def gen_create_material_function():
         '    build_arnold = target in ("all", "arnold")',
         '    build_karma = target in ("all", "karma")',
         '    build_redshift = target in ("all", "redshift")',
-        '    build_preview = target in ("all", "preview")',
+        '    build_preview = True  # Always build UsdPreviewSurface as universal fallback for Hydra/OpenGL delegates',
         '',
-        '    # --- UsdPreviewSurface (Only built when preview or all is requested) ---',
+        '    # --- UsdPreviewSurface (Universal fallback for viewport and preview delegates) ---',
         '    if build_preview:',
         '        _ups_shader = UsdShade.Shader.Define(stage, mat_path.AppendChild("PreviewSurface"))',
         '        _ups_shader.CreateIdAttr("UsdPreviewSurface")',
@@ -701,32 +701,18 @@ def gen_create_material_function():
         '            _rs_shader.CreateInput("opacity_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(_rs_op.ConnectableAPI(), "outColor")',
         '',
         '    # Wire surface outputs strictly for selected delegate',
-        '    if target == "all":',
-        '        _mat.CreateSurfaceOutput().ConnectToSource(_km_out)',
-        '        _mat.CreateSurfaceOutput("mtlx").ConnectToSource(_km_out)',
+        '    # Universal outputs:surface (no context token) must ALWAYS point to UsdPreviewSurface',
+        '    # so OpenGL Hydra delegates (Houdini GL, Storm, usdview) never render black or dark.',
+        '    if build_preview:',
+        '        _mat.CreateSurfaceOutput().ConnectToSource(_ups_out)',
+        '    if build_karma:',
         '        _mat.CreateSurfaceOutput("karma").ConnectToSource(_km_out)',
-        '        _mat.CreateSurfaceOutput("arnold").ConnectToSource(_km_out)',
-        '        _mat.CreateSurfaceOutput("redshift").ConnectToSource(_km_out)',
-        '        _mat.CreateSurfaceOutput("Redshift").ConnectToSource(_km_out)',
-        '        if build_preview:',
-        '            _mat.CreateSurfaceOutput("preview").ConnectToSource(_ups_out)',
-        '    else:',
-        '        if build_preview:',
-        '            _mat.CreateSurfaceOutput().ConnectToSource(_ups_out)',
-        '        if build_arnold:',
-        '            _mat.CreateSurfaceOutput("arnold").ConnectToSource(_ai_out)',
-        '            if not build_preview:',
-        '                _mat.CreateSurfaceOutput().ConnectToSource(_ai_out)',
-        '        if build_karma:',
-        '            _mat.CreateSurfaceOutput("karma").ConnectToSource(_km_out)',
-        '            _mat.CreateSurfaceOutput("mtlx").ConnectToSource(_km_out)',
-        '            if not build_preview and not build_arnold:',
-        '                _mat.CreateSurfaceOutput().ConnectToSource(_km_out)',
-        '        if build_redshift:',
-        '            _mat.CreateSurfaceOutput("redshift").ConnectToSource(_rs_out)',
-        '            _mat.CreateSurfaceOutput("Redshift").ConnectToSource(_rs_out)',
-        '            if not build_preview and not build_arnold and not build_karma:',
-        '                _mat.CreateSurfaceOutput().ConnectToSource(_rs_out)',
+        '        _mat.CreateSurfaceOutput("mtlx").ConnectToSource(_km_out)',
+        '    if build_arnold:',
+        '        _mat.CreateSurfaceOutput("arnold").ConnectToSource(_ai_out)',
+        '    if build_redshift:',
+        '        _mat.CreateSurfaceOutput("redshift").ConnectToSource(_rs_out)',
+        '        _mat.CreateSurfaceOutput("Redshift").ConnectToSource(_rs_out)',
         '    return _mat',
         '',
     ]
@@ -782,7 +768,9 @@ def create_or_update_material_library(stage_node, p, mat_lib_node_name=None):
 
     is_all_renderers = ("all" in raw_target) or (raw_target == "all")
 
-    if any(k in raw_target for k in ("karma", "karmacpu", "karmagpu", "mtlx")):
+    if is_all_renderers:
+        target = "all"
+    elif any(k in raw_target for k in ("karma", "karmacpu", "karmagpu", "mtlx")):
         target = "karma"
     elif "arnold" in raw_target:
         # In Solaris, Arnold natively compiles and renders MaterialX standard_surface shaders.
@@ -792,8 +780,6 @@ def create_or_update_material_library(stage_node, p, mat_lib_node_name=None):
         target = "redshift"
     elif "preview" in raw_target or "usd" in raw_target:
         target = "preview"
-    elif is_all_renderers:
-        target = "all"
     else:
         target = "karma"
 
@@ -832,8 +818,12 @@ def create_or_update_material_library(stage_node, p, mat_lib_node_name=None):
     feather = float(p.get("ground_feather", 0.15))
 
     proj_mode = p.get("proj_mode", "room_box")
+    is_ground_disc = (proj_mode == "ground_disc" or proj_mode == "ground_plane")
+    is_top_view = (p.get("disc_proj_method", "top_view") == "top_view")
     use_planar = bool(p.get("use_planar", (p.get("ground_tex_mode", "planar") == "planar") if isinstance(p.get("ground_tex_mode"), str) else (p.get("ground_tex_mode_idx", 0) == 0)))
-    planar_textures = p.get("planar_textures", {}) if use_planar else {}
+    if is_ground_disc:
+        use_planar = is_top_view
+    planar_textures = p.get("planar_textures", {}) if isinstance(p.get("planar_textures"), dict) else {}
     import os
     hdri_tex = p.get("hdri_texture", "") or p.get("hdri_file", "") or p.get("hdri_tex", "")
 
@@ -860,7 +850,15 @@ def create_or_update_material_library(stage_node, p, mat_lib_node_name=None):
         return candidates[0] if is_splatforge else (candidates[1] if len(candidates) > 1 else candidates[0])
 
     def _surf_tex(sname):
-        if use_planar and isinstance(planar_textures, dict):
+        if sname == "ground":
+            gpt = p.get("ground_planar_texture")
+            if gpt and os.path.isfile(gpt) and os.path.getsize(gpt) > 0:
+                return gpt
+            if isinstance(planar_textures, dict):
+                t = planar_textures.get("ground", "")
+                if t and os.path.isfile(t) and os.path.getsize(t) > 0:
+                    return t
+        elif use_planar and isinstance(planar_textures, dict):
             t = planar_textures.get(sname, "")
             if t and os.path.isfile(t) and os.path.getsize(t) > 0:
                 return t
@@ -896,20 +894,23 @@ def create_or_update_material_library(stage_node, p, mat_lib_node_name=None):
     expected_type_map = {
         "redshift": "redshift::StandardMaterial",
         "arnold": "arnold_materialbuilder",
-        "karma": "mtlxstandard_surface",
-        "all": "mtlxstandard_surface",
+        "karma": "subnet",
+        "all": "subnet",
         "preview": "usdpreviewsurface",
     }
-    target_mat_type = expected_type_map.get(target, "mtlxstandard_surface")
+    target_mat_type = expected_type_map.get(target, "subnet")
 
     # Clean up existing nodes inside mat_lib that belong to a different renderer type or are obsolete
+    is_container_target = target in ("arnold", "karma", "all")
     for child in list(mat_lib.children()):
         c_name = child.name()
         c_type = child.type().name()
-        if c_name in active_mat_names and c_type != target_mat_type:
-            child.destroy()
-        elif not any(c_name.startswith(f"{s[0]}_") or c_name == s[1] for s in surfaces):
-            child.destroy()
+        if c_name in active_mat_names:
+            if c_type != target_mat_type:
+                child.destroy()
+        else:
+            if is_container_target or not any(c_name.startswith(f"{s[0]}_") for s in surfaces):
+                child.destroy()
 
     # Setup assignment multiparm on mat_lib
     mat_lib.parm("materials").set(len(surfaces))
@@ -1121,39 +1122,78 @@ def create_or_update_material_library(stage_node, p, mat_lib_node_name=None):
                 pass
 
         # -------------------------------------------------------------
-        # 3. KARMA (MATERIALX) DELEGATED MATERIAL
+        # 3. KARMA MATERIAL BUILDER (NATIVE MATERIALX SUBNET)
         # -------------------------------------------------------------
         elif target in ("karma", "all", "materialx"):
-            km_mat = mat_lib.node(mat_name)
+            kma_sub = mat_lib.node(mat_name)
+            if kma_sub is None or kma_sub.type().name() != "subnet":
+                if kma_sub is not None:
+                    kma_sub.destroy()
+                try:
+                    import voptoolutils
+                    mask = voptoolutils.KARMAMTLX_TAB_MASK if hasattr(voptoolutils, 'KARMAMTLX_TAB_MASK') else "karma USD"
+                    kma_sub = voptoolutils._setupMtlXBuilderSubnet(
+                        destination_node=mat_lib,
+                        name=mat_name,
+                        mask=mask,
+                        folder_label='Karma Material Builder',
+                        render_context='kma'
+                    )
+                except Exception:
+                    kma_sub = mat_lib.createNode('subnet', mat_name)
+                    kma_sub.setShaderLanguageName('MaterialX')
+
+            # Ensure material flag is active for Solaris Material Library
+            try:
+                kma_sub.setMaterialFlag(True)
+            except Exception:
+                pass
+
+            # Retrieve or create the standard surface shader inside the subnet
+            km_mat = kma_sub.node("mtlxstandard_surface")
             if km_mat is None or km_mat.type().name() != "mtlxstandard_surface":
                 if km_mat is not None:
                     km_mat.destroy()
-                km_mat = mat_lib.createNode("mtlxstandard_surface", mat_name)
+                km_mat = kma_sub.createNode("mtlxstandard_surface", "mtlxstandard_surface")
 
+            # Ensure surface output is connected inside the subnet
+            out_node = kma_sub.node("Material_Outputs_and_AOVs")
+            if out_node is None:
+                for ch in kma_sub.children():
+                    if ch.type().name() in ("suboutput", "subnetconnector"):
+                        out_node = ch
+                        break
+            if out_node:
+                try:
+                    out_node.setInput(0, km_mat, 0)
+                except Exception:
+                    pass
+
+            # Texture sampler inside the subnet
             if surf_key == "props" and not norm_tex_path:
                 km_tex_name = f"{surf_key}_vcol"
-                km_tex = mat_lib.node(km_tex_name)
+                km_tex = kma_sub.node(km_tex_name)
                 if km_tex is None or km_tex.type().name() != "mtlxgeomcolor":
                     if km_tex is not None:
                         km_tex.destroy()
-                    km_tex = mat_lib.createNode("mtlxgeomcolor", km_tex_name)
+                    km_tex = kma_sub.createNode("mtlxgeomcolor", km_tex_name)
             else:
                 km_tex_name = f"{surf_key}_tex"
-                km_tex = mat_lib.node(km_tex_name)
+                km_tex = kma_sub.node(km_tex_name)
                 if km_tex is None or km_tex.type().name() != "mtlximage":
                     if km_tex is not None:
                         km_tex.destroy()
-                    km_tex = mat_lib.createNode("mtlximage", km_tex_name)
+                    km_tex = kma_sub.createNode("mtlximage", km_tex_name)
 
                 if km_tex.parm("file") and norm_tex_path:
                     km_tex.parm("file").set(norm_tex_path)
 
                 km_uv_name = f"{surf_key}_uv"
-                km_uv = mat_lib.node(km_uv_name)
+                km_uv = kma_sub.node(km_uv_name)
                 if km_uv is None or km_uv.type().name() != "mtlxtexcoord":
                     if km_uv is not None:
                         km_uv.destroy()
-                    km_uv = mat_lib.createNode("mtlxtexcoord", km_uv_name)
+                    km_uv = kma_sub.createNode("mtlxtexcoord", km_uv_name)
                 if km_uv.parm("index"):
                     km_uv.parm("index").set(0)
                 km_tex.setInput(3, km_uv, 0)  # texcoord
@@ -1207,35 +1247,40 @@ def create_or_update_material_library(stage_node, p, mat_lib_node_name=None):
                 if km_mat.parm("specular_IOR"):
                     km_mat.parm("specular_IOR").set(km_ior)
 
-            # Ground feathering opacity
+            # Ground feathering opacity inside the subnet
             km_op_name = f"{surf_key}_op"
             km_conv_name = f"{surf_key}_op_conv"
             if has_feather:
-                km_op = mat_lib.node(km_op_name)
+                km_op = kma_sub.node(km_op_name)
                 if km_op is None or km_op.type().name() != "mtlxgeompropvalue":
                     if km_op is not None:
                         km_op.destroy()
-                    km_op = mat_lib.createNode("mtlxgeompropvalue", km_op_name)
+                    km_op = kma_sub.createNode("mtlxgeompropvalue", km_op_name)
                 if km_op.parm("geomprop"):
                     km_op.parm("geomprop").set("displayOpacity")
                 if km_op.parm("signature"):
                     km_op.parm("signature").set("float")
 
-                km_conv = mat_lib.node(km_conv_name)
+                km_conv = kma_sub.node(km_conv_name)
                 if km_conv is None or km_conv.type().name() != "mtlxconvert":
                     if km_conv is not None:
                         km_conv.destroy()
-                    km_conv = mat_lib.createNode("mtlxconvert", km_conv_name)
+                    km_conv = kma_sub.createNode("mtlxconvert", km_conv_name)
                 km_conv.setInput(0, km_op, 0)
                 km_mat.setInput(38, km_conv, 0)  # opacity (color3)
             else:
-                km_conv = mat_lib.node(km_conv_name)
+                km_conv = kma_sub.node(km_conv_name)
                 if km_conv is not None:
                     km_conv.destroy()
-                km_op = mat_lib.node(km_op_name)
+                km_op = kma_sub.node(km_op_name)
                 if km_op is not None:
                     km_op.destroy()
                 km_mat.setInput(38, None, 0)
+
+            try:
+                kma_sub.layoutChildren()
+            except Exception:
+                pass
 
         # -------------------------------------------------------------
         # 4. USD PREVIEW SURFACE (OR FALLBACK)

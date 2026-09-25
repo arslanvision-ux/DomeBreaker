@@ -2767,13 +2767,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.combo_arch_renderer_target.addItems([
             "All Renderers (Arnold + Karma + Redshift)",
             "Arnold",
-            "Karma (MaterialX)",
+            "Karma Material Builder",
             "Redshift",
             "USD Preview Only",
         ])
         self.combo_arch_renderer_target.setToolTip(
             "Target renderer for Gaussian Splatting architecture material networks.\n"
-            "Creates native shaders wired to renderer-specific surface outputs."
+            "Creates native shaders and builder subnets wired to renderer-specific surface outputs."
         )
         self.combo_arch_renderer_target.currentIndexChanged.connect(self._on_arch_material_changed)
         lay.addRow("Renderer Target:", self.combo_arch_renderer_target)
@@ -3155,11 +3155,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.combo_prop_uv_mode.currentIndexChanged.connect(self._on_prop_param_changed)
         grp_edit_lay.addRow("UV Mapping:", self.combo_prop_uv_mode)
 
-        # Shader Target (Karma MaterialX, Arnold, Redshift, All, USD Preview)
+        # Shader Target (Karma Material Builder, Arnold, Redshift, All, USD Preview)
         self.combo_prop_shader_target = QtWidgets.QComboBox()
         self.combo_prop_shader_target.addItems([
             "Match Room / Global Target (Auto)",
-            "Karma (MaterialX Standard Surface)",
+            "Karma Material Builder",
             "Arnold (Standard Surface)",
             "Redshift (StandardMaterial)",
             "All Renderers",
@@ -3168,7 +3168,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.combo_prop_shader_target.setToolTip(
             "Target renderer shader to build for this prop in Solaris /stage:\n"
             "• Match Room / Global Target (Auto): Inherits the renderer target chosen in Room Architecture / Dome.\n"
-            "• Karma (MaterialX): Native mtlxstandard_surface for Karma CPU / GPU viewport and production renders.\n"
+            "• Karma Material Builder: Native Karma Material Builder subnet (karmamaterial) with MaterialX Standard Surface.\n"
             "• Arnold: Native arnold:standard_surface with arnold:image.\n"
             "• Redshift: Native redshift::StandardMaterial.\n"
             "• All Renderers: Authors all shaders and surface outputs simultaneously."
@@ -7207,14 +7207,14 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.combo_renderer_target.addItems([
             "All Renderers (Arnold + Karma + Redshift)",
             "Arnold",
-            "Karma (MaterialX)",
+            "Karma Material Builder",
             "Redshift",
             "USD Preview Only",
         ])
         self.combo_renderer_target.setToolTip(
             "Select which renderer-native shader graphs to build inside the USD material:\n"
-            "• All Renderers: Arnold Standard Surface + Karma MaterialX + Redshift StandardMaterial + UsdPreviewSurface viewport fallback.\n"
-            "• Single renderer: Native shader + UsdPreviewSurface fallback only.\n"
+            "• All Renderers: Arnold Standard Surface + Karma Material Builder + Redshift StandardMaterial + UsdPreviewSurface viewport fallback.\n"
+            "• Single renderer: Native shader / builder subnet + UsdPreviewSurface fallback only.\n"
             "• USD Preview Only: UsdPreviewSurface only (lightweight, GL viewport)."
         )
         lay.addRow("Renderer Target:", self.combo_renderer_target)
@@ -7246,6 +7246,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.widget_disc_controls.setVisible(not is_room)
         if hasattr(self, 'widget_room_controls'):
             self.widget_room_controls.setVisible(is_room)
+        if hasattr(self, 'btn_bake_ground_planar'):
+            if is_room:
+                self.btn_bake_ground_planar.setText("🎨 Bake Planar Room Textures")
+                self.btn_bake_ground_planar.setToolTip("Bake distortion-free rectilinear OpenEXR textures for floor, ceiling, and all 4 walls.")
+            else:
+                self.btn_bake_ground_planar.setText("🎨 Bake Planar Ground Texture")
+                self.btn_bake_ground_planar.setToolTip("Bake distortion-free rectilinear OpenEXR top-view planar texture for the ground disc.")
         if not getattr(self, '_restoring_state', False) and not getattr(self, '_initializing', False):
             if is_room and hasattr(self, 'chk_snap_to_room'):
                 self.chk_snap_to_room.setChecked(True)
@@ -7331,6 +7338,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 self._ground_planar_textures = existing_planar
 
         p["planar_textures"] = existing_planar
+        if isinstance(existing_planar, dict) and existing_planar.get("ground"):
+            p["ground_planar_texture"] = existing_planar["ground"]
 
         try:
             matlib_func = _get_create_or_update_material_library()
@@ -7485,12 +7494,12 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         }
         probe_pos = (cam_ox, tripod_h, cam_oz)
 
+        is_disc = (self.combo_proj_mode.currentIndex() == 0) if hasattr(self, 'combo_proj_mode') else True
+
         try:
             from hdri_match_solaris.gaussian_splat import GaussianSplatBaker
             hdri_source, was_inpainted = self._get_inpainted_hdri_source(hdri_path, planar_dir=planar_dir)
             inpaint_note = " (with practical lights painted out)" if was_inpainted else ""
-            yaw_note = f" at relative yaw {rel_yaw}°" if abs(rel_yaw) > 1e-3 else ""
-            self.log(f"Baking 6 planar rectilinear surface textures ({pres}x{pres}) from {os.path.basename(hdri_path)}{yaw_note}{inpaint_note}...", "INFO")
             if hasattr(self, 'pbar_ground_planar'):
                 self.pbar_ground_planar.setVisible(True)
                 self.pbar_ground_planar.setValue(10)
@@ -7503,21 +7512,40 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     self.pbar_ground_planar.setFormat(msg)
                 QtWidgets.QApplication.processEvents()
 
-            self._ground_planar_textures = GaussianSplatBaker.bake_planar_room_textures(
-                hdri_source=hdri_source,
-                room_data=room_data,
-                output_dir=planar_dir,
-                probe_pos=probe_pos,
-                resolution_floor=pres,
-                resolution_walls=pres,
-                yaw=rel_yaw,
-                progress_callback=_on_progress,
-            )
+            if is_disc:
+                ground_diff_exr = os.path.join(planar_dir, "ground_diffuse.exr").replace("\\", "/")
+                ground_r = float(self.sld_ground_radius.value()) if hasattr(self, 'sld_ground_radius') else 10.0
+                self.log(f"Baking top-view planar ground texture ({pres}x{pres}){inpaint_note}...", "INFO")
+                GaussianSplatBaker.bake_planar_ground_texture(
+                    hdri_source=hdri_source,
+                    output_path=ground_diff_exr,
+                    ground_radius=ground_r,
+                    tripod_height=tripod_h,
+                    yaw=0.0,
+                    resolution=pres,
+                    progress_callback=_on_progress,
+                )
+                self._ground_planar_textures = {"ground": ground_diff_exr}
+                self.log(f"Baked top-view planar ground texture ({pres}x{pres}) successfully: {os.path.basename(ground_diff_exr)}", "SUCCESS")
+            else:
+                yaw_note = f" at relative yaw {rel_yaw}°" if abs(rel_yaw) > 1e-3 else ""
+                self.log(f"Baking 6 planar rectilinear surface textures ({pres}x{pres}) from {os.path.basename(hdri_path)}{yaw_note}{inpaint_note}...", "INFO")
+                self._ground_planar_textures = GaussianSplatBaker.bake_planar_room_textures(
+                    hdri_source=hdri_source,
+                    room_data=room_data,
+                    output_dir=planar_dir,
+                    probe_pos=probe_pos,
+                    resolution_floor=pres,
+                    resolution_walls=pres,
+                    yaw=rel_yaw,
+                    progress_callback=_on_progress,
+                )
+                self.log(f"Baked {len(self._ground_planar_textures)} planar textures ({pres}x{pres}) successfully!", "SUCCESS")
+
             if hasattr(self, 'pbar_ground_planar'):
                 self.pbar_ground_planar.setValue(100)
                 self.pbar_ground_planar.setFormat(f"Planar Ready ({pres}x{pres})")
             QtWidgets.QApplication.processEvents()
-            self.log(f"Baked {len(self._ground_planar_textures)} planar textures ({pres}x{pres}) successfully!", "SUCCESS")
             self._create_or_update_ground_projection(notify_ui=True)
             self._sync_node()
         except Exception as ex:
@@ -9595,20 +9623,54 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     rel_yaw = round((room_yaw - dome_yaw) % 360.0, 1)
                     yaw_tag = f"_yaw{int(rel_yaw * 10)}" if abs(rel_yaw) > 1e-3 else ""
                     planar_dir = os.path.join(hip_dir, "hdri_match", f"planar_textures_{hdri_base}_{pres}{yaw_tag}").replace("\\", "/")
+                    planar_dir_noyaw = os.path.join(hip_dir, "hdri_match", f"planar_textures_{hdri_base}_{pres}").replace("\\", "/")
+                    import re
+                    hdri_clean_base = re.sub(r'(_inpainted|_calibrated)+$', '', hdri_base)
+                    clean_planar_dir = os.path.join(hip_dir, "hdri_match", f"planar_textures_{hdri_clean_base}_{pres}{yaw_tag}").replace("\\", "/")
+                    clean_planar_dir_noyaw = os.path.join(hip_dir, "hdri_match", f"planar_textures_{hdri_clean_base}_{pres}").replace("\\", "/")
 
-                    existing_planar = {}
-                    if os.path.isdir(planar_dir):
-                        for sname in ["floor", "ceiling", "wall_north", "wall_south", "wall_east", "wall_west"]:
-                            for sfx in ["_diffuse.exr", "_albedo.exr"]:
-                                fpath = os.path.join(planar_dir, f"{sname}{sfx}").replace("\\", "/")
-                                if os.path.isfile(fpath) and os.path.getsize(fpath) > 0:
-                                    existing_planar[sname] = fpath
-                                    break
-                    if len(existing_planar) == 6:
-                        p["planar_textures"] = existing_planar
-                        self._ground_planar_textures = existing_planar
+                    cur_proj_mode = p.get("proj_mode", "ground_disc")
+                    if cur_proj_mode == "ground_disc":
+                        ground_diff_candidate = None
+                        for pdir in [planar_dir_noyaw, planar_dir, clean_planar_dir_noyaw, clean_planar_dir]:
+                            cand = os.path.join(pdir, "ground_diffuse.exr").replace("\\", "/")
+                            if os.path.isfile(cand) and os.path.getsize(cand) > 0:
+                                ground_diff_candidate = cand
+                                break
+                        if not ground_diff_candidate:
+                            existing_gpt = p.get("ground_planar_texture") or (self._ground_planar_textures.get("ground") if hasattr(self, "_ground_planar_textures") and isinstance(self._ground_planar_textures, dict) else None)
+                            if existing_gpt and os.path.isfile(existing_gpt) and os.path.getsize(existing_gpt) > 0:
+                                ground_diff_candidate = existing_gpt
+
+                        if ground_diff_candidate:
+                            p["planar_textures"] = {"ground": ground_diff_candidate}
+                            p["ground_planar_texture"] = ground_diff_candidate
+                            self._ground_planar_textures = p["planar_textures"]
+                        elif hasattr(self, "_ground_planar_textures") and isinstance(self._ground_planar_textures, dict) and self._ground_planar_textures.get("ground"):
+                            p["planar_textures"] = self._ground_planar_textures
+                            p["ground_planar_texture"] = self._ground_planar_textures.get("ground")
+                        else:
+                            p["planar_textures"] = {}
+                            p["ground_planar_texture"] = None
                     else:
-                        p["planar_textures"] = {}
+                        existing_planar = {}
+                        for check_pdir in [planar_dir, clean_planar_dir]:
+                            if os.path.isdir(check_pdir):
+                                for sname in ["floor", "ceiling", "wall_north", "wall_south", "wall_east", "wall_west"]:
+                                    for sfx in ["_diffuse.exr", "_albedo.exr"]:
+                                        fpath = os.path.join(check_pdir, f"{sname}{sfx}").replace("\\", "/")
+                                        if os.path.isfile(fpath) and os.path.getsize(fpath) > 0:
+                                            existing_planar[sname] = fpath
+                                            break
+                            if len(existing_planar) == 6:
+                                break
+                        if len(existing_planar) == 6:
+                            p["planar_textures"] = existing_planar
+                            self._ground_planar_textures = existing_planar
+                        elif hasattr(self, "_ground_planar_textures") and isinstance(self._ground_planar_textures, dict) and len(self._ground_planar_textures) == 6:
+                            p["planar_textures"] = self._ground_planar_textures
+                        else:
+                            p["planar_textures"] = {}
 
                     # Auto-create if enabled and not yet present on stage so artist gets instant live viewport feedback
                     if proj_node is None:
@@ -11276,6 +11338,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     self.sld_ground_emissive_mult.setValue(float(state["ground_emissive_mult"]))
                 if "renderer_target_idx" in state and hasattr(self, 'combo_renderer_target'):
                     self.combo_renderer_target.setCurrentIndex(int(state["renderer_target_idx"]))
+                elif "renderer_target" in state and hasattr(self, 'combo_renderer_target'):
+                    _rt = str(state["renderer_target"]).lower()
+                    _rmap = {"all": 0, "arnold": 1, "karma": 2, "redshift": 3, "preview": 4}
+                    for k, idx in _rmap.items():
+                        if k in _rt:
+                            self.combo_renderer_target.setCurrentIndex(idx)
+                            break
                 if "ground_tex_mode_idx" in state and hasattr(self, 'combo_ground_tex_mode'):
                     self.combo_ground_tex_mode.setCurrentIndex(int(state["ground_tex_mode_idx"]))
                 elif "ground_tex_mode" in state and hasattr(self, 'combo_ground_tex_mode'):
@@ -15259,9 +15328,25 @@ def _update_proj_node_values(proj_node, p):
     _set_f("roughness", roughness_to_set)
     _set_s("disc_proj_method", p.get("disc_proj_method", "top_view"))
 
-    tex_file = (p.get("hdri_texture") or p.get("hdri_path", "")).replace(chr(92), "/")
+    raw_hdri = (p.get("hdri_texture") or p.get("hdri_path", "")).replace(chr(92), "/")
+    disc_proj_method = p.get("disc_proj_method", "top_view")
+    ground_planar_tex = (p.get("planar_textures", {}).get("ground") or p.get("ground_planar_texture") or "")
+    if ground_planar_tex:
+        ground_planar_tex = ground_planar_tex.replace(chr(92), "/")
+
+    if proj_mode == "ground_disc":
+        has_planar_ground = bool(disc_proj_method == "top_view" and ground_planar_tex and os.path.isfile(ground_planar_tex))
+        if has_planar_ground:
+            tex_file = ground_planar_tex
+            use_planar = True
+        else:
+            tex_file = raw_hdri
+            use_planar = False
+    else:
+        tex_file = raw_hdri
+        use_planar = bool(p.get("use_planar", p.get("ground_tex_mode", "planar") == "planar"))
+
     _set_s("tex_file", tex_file)
-    use_planar = bool(p.get("use_planar", p.get("ground_tex_mode", "planar") == "planar"))
     _set_i("use_planar", 1 if use_planar else 0)
     _set_s("mat_mode", p.get("ground_mat_mode", "pbr"))
     _set_f("emissive_mult", p.get("ground_emissive_mult", 1.0))
@@ -15706,13 +15791,16 @@ def _gen_ground_projection_code(p):
     ior_val = 1.0 if roughness >= 0.999 else 1.5
     spec_val = 0.0 if roughness >= 0.999 else max(0.0, min(1.0, 1.0 - roughness))
     disc_proj_method = p.get("disc_proj_method", "top_view")
-    ground_planar_tex = (p.get("planar_textures", {}).get("ground") or p.get("ground_planar_texture") or "").replace(chr(92), "/")
-    if disc_proj_method == "top_view" and ground_planar_tex and os.path.isfile(ground_planar_tex):
+    ground_planar_tex = (p.get("planar_textures", {}).get("ground") or p.get("ground_planar_texture") or "")
+    if ground_planar_tex:
+        ground_planar_tex = ground_planar_tex.replace(chr(92), "/")
+    has_valid_planar = bool(ground_planar_tex and os.path.isfile(ground_planar_tex) and os.path.getsize(ground_planar_tex) > 0)
+    if disc_proj_method == "top_view" and has_valid_planar:
         disc_tex = ground_planar_tex
         is_top_view = True
     else:
         disc_tex = tex_file
-        is_top_view = (disc_proj_method == "top_view")
+        is_top_view = False
 
     lines = [
         'import os, sys, math, numpy as np',
@@ -15744,7 +15832,10 @@ def _gen_ground_projection_code(p):
         'feather = float(node.parm("feather").eval() if node.parm("feather") else 0.15)',
         'yaw = float(node.parm("yaw").eval() if node.parm("yaw") else 0.0)',
         f'tex_file = (node.parm("tex_file").eval() if node.parm("tex_file") else r"{disc_tex}") or r"{disc_tex}"',
-        'is_top_view = bool((node.parm("disc_proj_method").eval() if node.parm("disc_proj_method") else "top_view") == "top_view")',
+        'requested_proj = str(node.parm("disc_proj_method").eval() if node.parm("disc_proj_method") else "top_view")',
+        '# A valid top-view planar projection requires an existing planar bake file (e.g. ground_diffuse.exr),',
+        '# never raw equirectangular panoramas which stretch sky/clouds into the center of the disc.',
+        'is_top_view = bool(requested_proj == "top_view" and tex_file and os.path.isfile(tex_file) and ("ground_diffuse" in tex_file or "planar" in tex_file))',
         'roughness_val = float(node.parm("roughness").eval() if node.parm("roughness") else 1.0)',
         'mat_mode_val = str(node.parm("mat_mode").eval() if node.parm("mat_mode") else "pbr")',
         'emissive_mult_val = float(node.parm("emissive_mult").eval() if node.parm("emissive_mult") else 1.0)',
@@ -15924,10 +16015,9 @@ def _gen_ground_projection_code(p):
         'col_pv.Set(colors)',
         '',
         'mat_path = Sdf.Path("/environment/ground_dome/ground_mat")',
-        'if not stage.GetPrimAtPath(mat_path).IsValid():',
-        '    op_pv_name = "displayOpacity" if (feather > 1e-4) else None',
-        '    mat = create_native_material(stage, mat_path, tex_file, roughness_val, mat_mode_val, emissive_mult_val, "st", renderer_target, opacity_primvar=op_pv_name)',
-        '    UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(mat)',
+        'op_pv_name = "displayOpacity" if (feather > 1e-4) else None',
+        'mat = create_native_material(stage, mat_path, tex_file, roughness_val, mat_mode_val, emissive_mult_val, "st", renderer_target, opacity_primvar=op_pv_name)',
+        'UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(mat)',
     ])
     return "\n".join(lines)
 
