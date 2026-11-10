@@ -53,23 +53,25 @@ def load_exr_to_numpy(file_path: str) -> np.ndarray:
     except Exception as e:
         errors.append(f"OpenImageIO: {e}")
 
-    # --- OpenCV (handles EXR + HDR natively when env var is set) ---
-    try:
-        import cv2
-        img = cv2.imread(file_path, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
-        if img is not None:
-            if len(img.shape) == 3 and img.shape[2] >= 3:
-                img = cv2.cvtColor(img[..., :3], cv2.COLOR_BGR2RGB)
-            orig_dtype = img.dtype
-            img = img.astype(np.float32)
-            if orig_dtype == np.uint8:
-                img /= 255.0
-            elif orig_dtype == np.uint16:
-                img /= 65535.0
-            return img
-        errors.append("cv2.imread returned None")
-    except Exception as e:
-        errors.append(f"OpenCV: {e}")
+    # --- OpenCV (Skip inside Houdini to prevent Qt/X11 symbol collisions and segfaults) ---
+    import sys
+    if 'hou' not in sys.modules:
+        try:
+            import cv2
+            img = cv2.imread(file_path, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
+            if img is not None:
+                if len(img.shape) == 3 and img.shape[2] >= 3:
+                    img = cv2.cvtColor(img[..., :3], cv2.COLOR_BGR2RGB)
+                orig_dtype = img.dtype
+                img = img.astype(np.float32)
+                if orig_dtype == np.uint8:
+                    img /= 255.0
+                elif orig_dtype == np.uint16:
+                    img /= 65535.0
+                return img
+            errors.append("cv2.imread returned None")
+        except Exception as e:
+            errors.append(f"OpenCV: {e}")
 
     # --- ImageIO ---
     try:

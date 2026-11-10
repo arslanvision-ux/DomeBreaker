@@ -1734,6 +1734,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        print("[DomeBreaker] Loading v2.0.2...")
         self._initializing = True
         self._restoring_state = False
         if not parent and self.isWindow():
@@ -1815,6 +1816,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         restored = self._restore_state_from_scene(notify=False, allow_prefs=False)
         self._initializing = False
         self.log("DomeBreaker panel initialized. Ready.", "SUCCESS")
+        print("[DomeBreaker] Ready v2.0.2.")
 
     def closeEvent(self, event):
         """Save entire session state when panel is closed."""
@@ -11099,15 +11101,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 except Exception:
                     pass
 
-            # 5. Try user preference JSON file on disk
-            if allow_prefs:
-                try:
-                    state_file = _get_state_filepath()
-                    if os.path.isfile(state_file):
-                        with open(state_file, "r", encoding="utf-8") as f:
-                            candidate_sources.append(("Saved preferences", json.load(f)))
-                except Exception:
-                    pass
+
 
             if not state:
                 # Select best candidate: prioritize the first source that has a valid hdri_path
@@ -12049,20 +12043,15 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             h, w = arr.shape[:2]
             target_h, target_w = 240, 480
             try:
-                import cv2
-                thumb = cv2.resize(arr[..., :3], (target_w, target_h), interpolation=cv2.INTER_AREA)
-                self._hdri_orig_thumb = thumb.astype(np.float32)
+                from PIL import Image
+                p_img = Image.fromarray(np.clip(arr[..., :3] * 255.0, 0, 255).astype(np.uint8))
+                resample_filter = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+                p_img = p_img.resize((target_w, target_h), resample_filter)
+                self._hdri_orig_thumb = (np.array(p_img, dtype=np.float32) / 255.0)
             except Exception:
-                try:
-                    from PIL import Image
-                    p_img = Image.fromarray(np.clip(arr[..., :3] * 255.0, 0, 255).astype(np.uint8))
-                    resample_filter = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
-                    p_img = p_img.resize((target_w, target_h), resample_filter)
-                    self._hdri_orig_thumb = (np.array(p_img, dtype=np.float32) / 255.0)
-                except Exception:
-                    y_idx = np.linspace(0, h - 1, target_h).astype(int)
-                    x_idx = np.linspace(0, w - 1, target_w).astype(int)
-                    self._hdri_orig_thumb = arr[y_idx][:, x_idx, :3].astype(np.float32)
+                y_idx = np.linspace(0, h - 1, target_h).astype(int)
+                x_idx = np.linspace(0, w - 1, target_w).astype(int)
+                self._hdri_orig_thumb = arr[y_idx][:, x_idx, :3].astype(np.float32)
             self._hdri_orig_full = arr[..., :3].astype(np.float32)
             self._hdri_orig_shape = (w, h)
             self._apply_input_colorspace(notify_ui=False)
@@ -12265,20 +12254,15 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             target_w = 480
             target_h = max(1, int(round(target_w * (h / float(w)))))
             try:
-                import cv2
-                thumb = cv2.resize(arr[..., :3], (target_w, target_h), interpolation=cv2.INTER_AREA)
-                self._plate_orig_thumb = thumb.astype(np.float32)
+                from PIL import Image
+                p_img = Image.fromarray(np.clip(arr[..., :3] * 255.0, 0, 255).astype(np.uint8))
+                resample_filter = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+                p_img = p_img.resize((target_w, target_h), resample_filter)
+                self._plate_orig_thumb = (np.array(p_img, dtype=np.float32) / 255.0)
             except Exception:
-                try:
-                    from PIL import Image
-                    p_img = Image.fromarray(np.clip(arr[..., :3] * 255.0, 0, 255).astype(np.uint8))
-                    resample_filter = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
-                    p_img = p_img.resize((target_w, target_h), resample_filter)
-                    self._plate_orig_thumb = (np.array(p_img, dtype=np.float32) / 255.0)
-                except Exception:
-                    y_idx = np.linspace(0, h - 1, target_h).astype(int)
-                    x_idx = np.linspace(0, w - 1, target_w).astype(int)
-                    self._plate_orig_thumb = arr[y_idx][:, x_idx, :3].astype(np.float32)
+                y_idx = np.linspace(0, h - 1, target_h).astype(int)
+                x_idx = np.linspace(0, w - 1, target_w).astype(int)
+                self._plate_orig_thumb = arr[y_idx][:, x_idx, :3].astype(np.float32)
 
             # Auto-suggest plate color space based on file format if not restoring existing state
             if hasattr(self, 'combo_plate_cs') and not getattr(self, '_restoring_state', False):
