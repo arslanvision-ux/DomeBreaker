@@ -5,9 +5,11 @@
     <script><![CDATA[
 def _find_crucible_dir():
     import os
-    embedded = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "python", "CrucibleLightStudio"))
-    if os.path.isdir(embedded):
-        return embedded
+    d_root = os.environ.get("DOMEBREAKER_ROOT", "")
+    if d_root:
+        embedded = os.path.join(d_root, "python", "CrucibleLightStudio")
+        if os.path.isdir(embedded):
+            return os.path.abspath(embedded)
     candidates = [
         os.environ.get("CRUCIBLE_LIGHT_STUDIO_ROOT"),
         os.environ.get("CRUCIBLE_ROOT"),
