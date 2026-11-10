@@ -8202,15 +8202,15 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
     # ------------------------------------------------------------------
 
     def _build_crucible_section(self):
-        """Build the embedded Crucible Light Studio panel container."""
+        """Build the embedded Crucible Light Studio panel container (lazy loaded)."""
         self._crucible_container = QtWidgets.QFrame()
         self._crucible_container.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self._crucible_container.setStyleSheet(
             "QFrame { background: #18191c; border-left: 1px solid #333; }"
         )
-        c_layout = QtWidgets.QVBoxLayout(self._crucible_container)
-        c_layout.setContentsMargins(4, 4, 4, 4)
-        c_layout.setSpacing(4)
+        self._crucible_layout = QtWidgets.QVBoxLayout(self._crucible_container)
+        self._crucible_layout.setContentsMargins(4, 4, 4, 4)
+        self._crucible_layout.setSpacing(4)
 
         # Pop Out button directly on Crucible Header
         self.btn_popout_crucible = QtWidgets.QPushButton("⧉ Pop Out", self._crucible_container)
@@ -8228,9 +8228,20 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_close_crucible = QtWidgets.QPushButton("✕", self._crucible_container)
         self.btn_close_crucible.hide()
 
-        # Embedded Crucible Panel (Single unified header)
+        # Embedded Crucible Panel (lazy loaded on user request)
         self._crucible_panel = None
         self._floating_crucible_win = None
+        self._crucible_initialized = False
+
+        # Initially hidden by default
+        self._crucible_container.hide()
+
+    def _ensure_crucible_panel_loaded(self):
+        """Lazy load Crucible Light Studio panel on demand when user opens the drawer."""
+        if self._crucible_initialized:
+            return self._crucible_panel is not None
+
+        self._crucible_initialized = True
         crucible_loaded = False
         try:
             c_root = _ensure_crucible_environment()
@@ -8241,7 +8252,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     self._crucible_panel.add_header_widget(self.btn_popout_crucible)
                 elif hasattr(self._crucible_panel, "_header_layout") and self._crucible_panel._header_layout:
                     self._crucible_panel._header_layout.addWidget(self.btn_popout_crucible)
-                c_layout.addWidget(self._crucible_panel, 1)
+                self._crucible_layout.addWidget(self._crucible_panel, 1)
+
+                # Connect signals
+                if hasattr(self._crucible_panel, "asset_library"):
+                    if hasattr(self._crucible_panel.asset_library, "send_to_match_requested"):
+                        self._crucible_panel.asset_library.send_to_match_requested.connect(self._on_crucible_hdri_selected)
+
                 self.log("HDRI Library integrated successfully into side panel.", "SUCCESS")
                 crucible_loaded = True
         except Exception as e:
@@ -8263,11 +8280,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 "color: #abb2bf; background: #1c1e24; border: 1px solid #2d313a; border-radius: 6px; padding: 12px; font-size: 11px;"
             )
             self.lbl_crucible_placeholder.setWordWrap(True)
-            c_layout.addWidget(self.lbl_crucible_placeholder, 1)
+            self._crucible_layout.addWidget(self.lbl_crucible_placeholder, 1)
             self.log("Crucible Light Studio not detected (running in standalone mode).", "INFO")
 
-        # Initially hidden by default
-        self._crucible_container.hide()
+        return crucible_loaded
 
     def _toggle_crucible_panel(self):
         """Toggle visibility of Crucible side panel."""
@@ -8276,6 +8292,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _set_crucible_visible(self, visible):
         """Set visibility of Crucible panel and update button state."""
+        if visible:
+            self._ensure_crucible_panel_loaded()
         self._crucible_container.setVisible(visible)
         self.btn_toggle_crucible.setChecked(visible)
         if visible:
@@ -8292,6 +8310,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _popout_crucible_window(self):
         """Pop out Crucible Studio into a separate floating window or dock back in."""
+        self._ensure_crucible_panel_loaded()
         if self._floating_crucible_win and self._floating_crucible_win.isVisible():
             self._dock_in_crucible()
         else:

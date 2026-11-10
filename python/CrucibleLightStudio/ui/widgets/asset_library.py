@@ -29,7 +29,11 @@ class ThumbnailWorker(QtCore.QThread):
         self.is_cancelled = False
         
     def run(self):
-        for i, asset in enumerate(self.assets):
+        kwargs = {}
+        if os.name == 'nt' and hasattr(subprocess, 'CREATE_NO_WINDOW'):
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+
+        for i, asset in self.assets:
             if self.is_cancelled: break
             if asset.get("is_folder", False): continue
             filepath = asset.get("path")
@@ -41,18 +45,25 @@ class ThumbnailWorker(QtCore.QThread):
                 if not os.path.exists(proxy_path):
                     try:
                         import subprocess
-                        ret = subprocess.run(["hoiiotool", filepath, "--resize", "512x512", "-o", proxy_path],
-                                             creationflags=subprocess.CREATE_NO_WINDOW, check=False).returncode
+                        ret = subprocess.run(
+                            ["hoiiotool", filepath, "--resize", "512x512", "-o", proxy_path],
+                            check=False,
+                            **kwargs
+                        ).returncode
                         if ret != 0:
-                            subprocess.run(["iconvert", filepath, proxy_path],
-                                           creationflags=subprocess.CREATE_NO_WINDOW, check=False)
-                    except: pass
+                            subprocess.run(
+                                ["iconvert", filepath, proxy_path],
+                                check=False,
+                                **kwargs
+                            )
+                    except Exception:
+                        pass
                 if os.path.exists(proxy_path):
                     try:
                         self.thumbnail_ready.emit(i, proxy_path)
                     except Exception:
                         pass
-            elif ext in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}:
+            elif ext in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}:
                 try:
                     self.thumbnail_ready.emit(i, filepath)
                 except Exception:
@@ -132,19 +143,32 @@ class AssetGridWidget(QtWidgets.QListWidget):
             self._worker.is_cancelled = True
             self._worker.wait()
 
-        for asset in asset_list:
+        worker_queue = []
+        for i, asset in enumerate(asset_list):
             item = QtWidgets.QListWidgetItem(asset["name"])
             item.setData(QtCore.Qt.UserRole, asset)
             item.setToolTip(asset["path"])
             if asset.get("is_folder", False):
                 item.setIcon(self._folder_icon())
             else:
-                item.setIcon(self._placeholder_icon(asset.get("ext", "")))
+                fpath = asset.get("path", "")
+                ext = asset.get("ext", "").lower()
+                # If it's a standard lightweight image, load icon directly without thread overhead
+                if ext in {".png", ".jpg", ".jpeg", ".webp"} and fpath and os.path.isfile(fpath):
+                    pixmap = QtGui.QPixmap(fpath)
+                    if not pixmap.isNull():
+                        item.setIcon(QtGui.QIcon(pixmap.scaled(96, 64, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)))
+                    else:
+                        item.setIcon(self._placeholder_icon(ext))
+                else:
+                    item.setIcon(self._placeholder_icon(ext))
+                    worker_queue.append((i, asset))
             self.addItem(item)
             
-        self._worker = ThumbnailWorker(asset_list, self)
-        self._worker.thumbnail_ready.connect(self._on_thumbnail_ready)
-        self._worker.start()
+        if worker_queue:
+            self._worker = ThumbnailWorker(worker_queue, self)
+            self._worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+            self._worker.start()
 
     def _on_thumbnail_ready(self, idx, filepath):
         item = self.item(idx)
