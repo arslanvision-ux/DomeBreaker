@@ -73,9 +73,13 @@ if [ "$FOUND_EXISTING" -eq 1 ]; then
     fi
 fi
 
+# Clean up legacy/stale state files to ensure clean startup
+rm -f "$HOME/.domebreaker_state.json"
+
 COUNT=0
 for hpref in "$HOME"/houdini* "$HOME"/.houdini*; do
     if [ -d "$hpref" ]; then
+        rm -f "${hpref}/domebreaker_state.json"
         PKG_DIR="${hpref}/packages"
         mkdir -p "${PKG_DIR}"
         
@@ -87,9 +91,6 @@ for hpref in "$HOME"/houdini* "$HOME"/.houdini*; do
         },
         {
             "HDRI_MATCH_SOLARIS_ROOT": "\$DOMEBREAKER_ROOT"
-        },
-        {
-            "CRUCIBLE_LIGHT_STUDIO_ROOT": "\$DOMEBREAKER_ROOT/python/CrucibleLightStudio"
         },
         {
             "PYTHONPATH": {

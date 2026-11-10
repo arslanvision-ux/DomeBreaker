@@ -1748,7 +1748,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._hdri_array = None
         self._plate_array = None
         self._hdri_thumb_raw = None
-        self._debug_win = HDRIDebugWindow(self)
+        self._debug_win = None
         self._plate_thumb_raw = None
         self._plate_orig_thumb = None
         self._plate_full_array = None
@@ -1775,23 +1775,12 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._sun_extract_timer.timeout.connect(
             lambda: self._extract_and_apply_sun_values() if hasattr(self, 'grp_sun') and self.grp_sun.isChecked() and (getattr(self, '_hdri_thumb_raw', None) is not None or (hasattr(self, 'txt_hdri') and self.txt_hdri.text().strip())) else None
         )
-        self._bg_bake_worker = BackgroundBakeWorker(self)
-        self._bg_bake_worker.bakeFinished.connect(self._on_bg_bake_finished)
-        self._bg_bake_worker.bakeFailed.connect(self._on_bg_bake_failed)
+        self._bg_bake_worker = None
         self._splat_scene = None
         self._splat_download_worker = None
-        self._splat_bake_worker = SplatBakeWorker(self)
-        self._splat_bake_worker.bakeProgress.connect(self._on_splat_bake_progress)
-        self._splat_bake_worker.bakeFinished.connect(self._on_splat_bake_finished)
-        self._splat_bake_worker.bakeFailed.connect(self._on_splat_bake_failed)
-        self._prop_bake_worker = SplatBakeWorker(self)
-        self._prop_bake_worker.bakeProgress.connect(self._on_prop_bake_progress)
-        self._prop_bake_worker.bakeFinished.connect(self._on_prop_bake_finished)
-        self._prop_bake_worker.bakeFailed.connect(self._on_prop_bake_failed)
-        self._planar_bake_worker = PlanarBakeWorker(self)
-        self._planar_bake_worker.bakeProgress.connect(self._on_planar_bake_progress)
-        self._planar_bake_worker.bakeFinished.connect(self._on_planar_bake_finished)
-        self._planar_bake_worker.bakeFailed.connect(self._on_planar_bake_failed)
+        self._splat_bake_worker = None
+        self._prop_bake_worker = None
+        self._planar_bake_worker = None
         self._planar_textures_dict = {}
         self._current_baking_prop_row = -1
         self._plate_orig_shape = None
@@ -1816,10 +1805,59 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         restored = self._restore_state_from_scene(notify=False, allow_prefs=False)
         self._initializing = False
         self.log("DomeBreaker panel initialized. Ready.", "SUCCESS")
-        print("[DomeBreaker] Ready v2.0.2.")
+        print("[DomeBreaker] Ready v2.0.3.")
+
+    def _get_bg_bake_worker(self):
+        if self._bg_bake_worker is None:
+            self._bg_bake_worker = BackgroundBakeWorker(parent=None)
+            self._bg_bake_worker.bakeFinished.connect(self._on_bg_bake_finished)
+            self._bg_bake_worker.bakeFailed.connect(self._on_bg_bake_failed)
+        return self._bg_bake_worker
+
+    def _get_splat_bake_worker(self):
+        if self._splat_bake_worker is None:
+            self._splat_bake_worker = SplatBakeWorker(parent=None)
+            self._splat_bake_worker.bakeProgress.connect(self._on_splat_bake_progress)
+            self._splat_bake_worker.bakeFinished.connect(self._on_splat_bake_finished)
+            self._splat_bake_worker.bakeFailed.connect(self._on_splat_bake_failed)
+        return self._splat_bake_worker
+
+    def _get_prop_bake_worker(self):
+        if self._prop_bake_worker is None:
+            self._prop_bake_worker = SplatBakeWorker(parent=None)
+            self._prop_bake_worker.bakeProgress.connect(self._on_prop_bake_progress)
+            self._prop_bake_worker.bakeFinished.connect(self._on_prop_bake_finished)
+            self._prop_bake_worker.bakeFailed.connect(self._on_prop_bake_failed)
+        return self._prop_bake_worker
+
+    def _get_planar_bake_worker(self):
+        if self._planar_bake_worker is None:
+            self._planar_bake_worker = PlanarBakeWorker(parent=None)
+            self._planar_bake_worker.bakeProgress.connect(self._on_planar_bake_progress)
+            self._planar_bake_worker.bakeFinished.connect(self._on_planar_bake_finished)
+            self._planar_bake_worker.bakeFailed.connect(self._on_planar_bake_failed)
+        return self._planar_bake_worker
+
+    def _get_debug_win(self):
+        if getattr(self, "_debug_win", None) is None:
+            self._debug_win = HDRIDebugWindow(parent=None)
+        return self._debug_win
 
     def closeEvent(self, event):
-        """Save entire session state when panel is closed."""
+        """Save entire session state and safely terminate background threads when panel is closed."""
+        for worker in (
+            getattr(self, "_bg_bake_worker", None),
+            getattr(self, "_splat_bake_worker", None),
+            getattr(self, "_prop_bake_worker", None),
+            getattr(self, "_planar_bake_worker", None),
+            getattr(self, "_splat_download_worker", None),
+        ):
+            if worker and worker.isRunning():
+                try:
+                    worker.quit()
+                    worker.wait(100)
+                except Exception:
+                    pass
         try:
             self._save_state()
         except Exception:
@@ -4886,7 +4924,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "min_dist": float(self.sld_splat_min_dist.value()) if hasattr(self, 'sld_splat_min_dist') else 0.20,
             "flip_y": self.chk_splat_flip_y.isChecked() if hasattr(self, 'chk_splat_flip_y') else True,
         }
-        self._prop_bake_worker.request_bake(params)
+        self._get_prop_bake_worker().request_bake(params)
 
     def _on_prop_bake_progress(self, pct):
         if hasattr(self, 'pbar_prop_bake'):
@@ -5743,7 +5781,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "probe_pos": probe_pos,
             "resolution": res_val,
         }
-        self._planar_bake_worker.request_bake(params)
+        self._get_planar_bake_worker().request_bake(params)
 
     def _on_planar_bake_progress(self, pct, name):
         if hasattr(self, 'pbar_planar'):
@@ -6072,7 +6110,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_download_splat.setText("Connecting...")
         self.log(f"Starting sample splat download to {dest_dir}...", "INFO")
 
-        self._splat_download_worker = SplatDownloadWorker(dest_dir, self)
+        self._splat_download_worker = SplatDownloadWorker(dest_dir, parent=None)
         self._splat_download_worker.progress.connect(self._on_splat_download_progress)
         self._splat_download_worker.finished.connect(self._on_splat_download_finished)
         self._splat_download_worker.failed.connect(self._on_splat_download_failed)
@@ -6235,7 +6273,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "flip_y": self.chk_splat_flip_y.isChecked() if hasattr(self, 'chk_splat_flip_y') else True,
             "inpaint_poles": self.chk_splat_inpaint_poles.isChecked() if hasattr(self, 'chk_splat_inpaint_poles') else True,
         }
-        self._splat_bake_worker.request_bake(params)
+        self._get_splat_bake_worker().request_bake(params)
 
     def _on_splat_bake_progress(self, pct):
         if hasattr(self, 'pbar_splat'):
@@ -10069,7 +10107,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "compression": "rle"
         }
 
-        self._bg_bake_worker.request_bake(params)
+        self._get_bg_bake_worker().request_bake(params)
 
     def _on_bg_bake_finished(self, calibrated_path, ev, black, temp, tint, sat=1.0, contrast=1.0):
         """Slot called on the main thread when background EXR bake completes."""
@@ -14563,10 +14601,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _popout_log_window(self):
         """Show and bring to front the floating debug output window."""
-        if hasattr(self, "_debug_win") and self._debug_win:
-            self._debug_win.show()
-            self._debug_win.raise_()
-            self._debug_win.activateWindow()
+        win = self._get_debug_win()
+        if win:
+            win.show()
+            win.raise_()
+            win.activateWindow()
 
     def _copy_log(self):
         if hasattr(self, "txt_log") and self.txt_log:

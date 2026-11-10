@@ -151,9 +151,6 @@ def generate_package_json(project_root):
                 "HDRI_MATCH_SOLARIS_ROOT": "$DOMEBREAKER_ROOT"
             },
             {
-                "CRUCIBLE_LIGHT_STUDIO_ROOT": "$DOMEBREAKER_ROOT/python/CrucibleLightStudio"
-            },
-            {
                 "PYTHONPATH": {
                     "value": [
                         "$DOMEBREAKER_ROOT/python"

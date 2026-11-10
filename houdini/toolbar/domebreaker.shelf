@@ -7,7 +7,6 @@
 
   <toolshelf name="domebreaker" label="DomeBreaker">
     <memberTool name="domebreaker_open_panel"/>
-    <memberTool name="domebreaker_reload_tool"/>
     <memberTool name="splatforge_open_panel"/>
   </toolshelf>
 
@@ -135,76 +134,4 @@ else:
 ]]></script>
   </tool>
 
-  <tool name="domebreaker_reload_tool" label="Reload DomeBreaker" icon="BUTTONS_reload">
-    <helpText><![CDATA[
-Reload all DomeBreaker & HDRI modules and refresh the open panel.
-]]></helpText>
-    <script scriptType="python"><![CDATA[
-import sys
-import importlib
-import hou
-
-modules = [
-    "hdri_match_solaris.oiio_adapter",
-    "hdri_match_solaris.pipeline",
-    "hdri_match_solaris.sun_detector",
-    "hdri_match_solaris.light_extractor",
-    "hdri_match_solaris.gaussian_splat",
-    "hdri_match_solaris.lop_splat",
-    "hdri_match_solaris.lop_custom_props",
-    "hdri_match_solaris.renderer_materials",
-    "hdri_match_solaris.hdri_room_analyzer",
-    "hdri_match_solaris.splatforge.config",
-    "hdri_match_solaris.splatforge.io.cache_manager",
-    "hdri_match_solaris.splatforge.io.splat_loader",
-    "hdri_match_solaris.splatforge.analysis.scene_analyzer",
-    "hdri_match_solaris.splatforge.analysis.room_detector",
-    "hdri_match_solaris.splatforge.analysis.light_analyzer",
-    "hdri_match_solaris.splatforge.lighting.hdri_generator",
-    "hdri_match_solaris.splatforge.lighting.light_extractor",
-    "hdri_match_solaris.splatforge.reconstruction.room_reconstructor",
-    "hdri_match_solaris.splatforge.ui.splatforge_tab",
-    "hdri_match_solaris.splatforge",
-    "hdri_match_solaris.panel_ui",
-    "hdri_match_solaris",
-    "domebreaker",
-    "hdri_match.io.loader",
-    "hdri_match.analysis.hdri_stats",
-    "hdri_match.core.pipeline",
-    "hdri_match.core.projection",
-    "hdri_match.core.inpaint",
-    "hdri_match",
-]
-
-reloaded = []
-for m in modules:
-    if m in sys.modules:
-        try:
-            importlib.reload(sys.modules[m])
-            reloaded.append(m)
-        except Exception:
-            pass
-
-target_interfaces = ["domebreaker_panel", "hdri_match_panel", "splatforge_panel"]
-desk = hou.ui.curDesktop()
-all_panes = [p for p in desk.paneTabs() if p.type() == hou.paneTabType.PythonPanel]
-for fp in desk.floatingPanels():
-    for p in fp.panes():
-        for tab in p.tabs():
-            if tab.type() == hou.paneTabType.PythonPanel:
-                all_panes.append(tab)
-
-for pane in all_panes:
-    act = pane.activeInterface()
-    if act and act.name() in target_interfaces:
-        iface_name = act.name()
-        try:
-            pane.setActiveInterface(hou.pypanel.interfaces()[iface_name])
-        except Exception:
-            pass
-
-hou.ui.setStatusMessage(f"DomeBreaker: reloaded {len(reloaded)} modules and rebuilt panel.", severity=hou.severityType.Message)
-print(f"[DomeBreaker] Reloaded: {', '.join(reloaded)}")
-]]></script>
-  </tool>
 </shelfDocument>
