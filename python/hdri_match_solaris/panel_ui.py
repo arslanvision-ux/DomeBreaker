@@ -426,7 +426,7 @@ class ColorPickerWidget(QtWidgets.QWidget):
         self.btn_swatch.setCursor(QtCore.Qt.PointingHandCursor)
         self.btn_swatch.setToolTip(f"Click to open Color Picker dialog for {self._label}")
 
-        self.btn_pick = QtWidgets.QPushButton("🎯 Pick")
+        self.btn_pick = QtWidgets.QPushButton("Pick")
         self.btn_pick.setCheckable(True)
         self.btn_pick.setChecked(False)
         self.btn_pick.setFixedHeight(22)
@@ -1173,7 +1173,7 @@ class HDRILargePreviewDialog(QtWidgets.QDialog):
         self.btn_fit.toggled.connect(self.update_image)
         top_bar.addWidget(self.btn_fit)
 
-        self.btn_close = QtWidgets.QPushButton("✕ Close")
+        self.btn_close = QtWidgets.QPushButton("Close")
         self.btn_close.clicked.connect(self.accept)
         top_bar.addWidget(self.btn_close)
 
@@ -1195,7 +1195,7 @@ class HDRILargePreviewDialog(QtWidgets.QDialog):
         self.info_bar = QtWidgets.QHBoxLayout()
         self.lbl_info = QtWidgets.QLabel("---")
         self.lbl_info.setStyleSheet("color: #888; font-size: 11px;")
-        self.lbl_hint = QtWidgets.QLabel("💡 Drag EV slider to inspect high-dynamic range highlights and deep shadows. Press Esc to close.")
+        self.lbl_hint = QtWidgets.QLabel("[i] Drag EV slider to inspect high-dynamic range highlights and deep shadows. Press Esc to close.")
         self.lbl_hint.setStyleSheet("color: #666; font-size: 10px; font-style: italic;")
         self.info_bar.addWidget(self.lbl_info, 1)
         self.info_bar.addWidget(self.lbl_hint, 0)
@@ -1395,7 +1395,7 @@ class HDRIBoundaryLargeViewDialog(QtWidgets.QDialog):
         self.btn_fit.toggled.connect(self._display_pixmap)
         top_bar.addWidget(self.btn_fit)
 
-        self.btn_close = QtWidgets.QPushButton("✕ Close")
+        self.btn_close = QtWidgets.QPushButton("Close")
         self.btn_close.clicked.connect(self.accept)
         top_bar.addWidget(self.btn_close)
 
@@ -1429,7 +1429,7 @@ class HDRIBoundaryLargeViewDialog(QtWidgets.QDialog):
             bot_bar.addWidget(lbl_leg)
 
         bot_bar.addSpacing(20)
-        lbl_hint = QtWidgets.QLabel("💡 Live Sync: Sliders adjusted in the main panel update here in real-time.")
+        lbl_hint = QtWidgets.QLabel("[i] Live Sync: Sliders adjusted in the main panel update here in real-time.")
         lbl_hint.setStyleSheet("color: #777; font-size: 11px; font-style: italic;")
         bot_bar.addWidget(lbl_hint, 1)
 
@@ -1688,19 +1688,15 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
     def _get_logo_path():
         """Resolve absolute path to the DomeBreaker logo."""
         candidates = [
-            os.path.join(os.path.dirname(__file__), "icons", "domebreaker_logo.png"),
             os.path.join(os.path.dirname(__file__), "icons", "domebreaker_logo_128.png"),
-            r"E:\PROJECTS\HDRI_MATCH_SOLARIS\python\hdri_match_solaris\icons\domebreaker_logo.png",
-            r"E:\PROJECTS\HDRI_MATCH_SOLARIS\screenshots\Gemini_Generated_Image_dw1ygudw1ygudw1y.jfif",
-            r"E:\PROJECTS\HDRI_MATCH_SOLARIS\screenshots\domebreaker_logo.png",
-            r"E:\PROJECTS\HDRI_MATCH_SOLARIS\houdini\toolbar\domebreaker_logo_48.png",
-            r"E:\PROJECTS\HDRI_MATCH_SOLARIS\houdini\config\Icons\domebreaker_logo.png",
+            os.path.join(os.path.dirname(__file__), "icons", "domebreaker_logo_48.png"),
+            os.path.join(os.path.dirname(__file__), "icons", "domebreaker_logo.png"),
         ]
         for env_var in ["DOMEBREAKER_ROOT", "HDRI_MATCH_SOLARIS_ROOT"]:
             val = os.environ.get(env_var, "")
             if val:
-                candidates.insert(0, os.path.join(val, "python", "hdri_match_solaris", "icons", "domebreaker_logo.png"))
-                candidates.insert(1, os.path.join(val, "screenshots", "Gemini_Generated_Image_dw1ygudw1ygudw1y.jfif"))
+                candidates.insert(0, os.path.join(val, "python", "hdri_match_solaris", "icons", "domebreaker_logo_128.png"))
+                candidates.insert(1, os.path.join(val, "python", "hdri_match_solaris", "icons", "domebreaker_logo_48.png"))
 
         for c in candidates:
             if os.path.isfile(c):
@@ -1726,7 +1722,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     @classmethod
     def _get_logo_icon(cls):
-        """Return QIcon of the DomeBreaker logo."""
+        """Return QIcon of the DomeBreaker logo safely sized for X11 / Window Managers."""
+        for name in ["domebreaker_logo_48.png", "domebreaker_logo_128.png"]:
+            p = os.path.join(os.path.dirname(__file__), "icons", name)
+            if os.path.isfile(p):
+                return QtGui.QIcon(p)
         path = cls._get_logo_path()
         if path and os.path.isfile(path):
             return QtGui.QIcon(path)
@@ -1737,10 +1737,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._initializing = True
         self._restoring_state = False
         if not parent and self.isWindow():
-            self.setWindowTitle("DomeBreaker — USD Lighting & Environment Suite")
-        logo_icon = self._get_logo_icon()
-        if logo_icon and not logo_icon.isNull():
-            self.setWindowIcon(logo_icon)
+            self.setWindowTitle("DomeBreaker - USD Lighting & Environment Suite")
+            logo_icon = self._get_logo_icon()
+            if logo_icon and not logo_icon.isNull():
+                self.setWindowIcon(logo_icon)
         self.setMinimumWidth(380)
 
         self._pipeline = None
@@ -1908,11 +1908,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         features = [
             "⚡ <b>Physical Sun Relighting:</b> Perez all-weather sky reconstruction & CCT.",
-            "💡 <b>Multi-Light Extraction:</b> Automatic cluster detection & inpainting.",
-            "📐 <b>HDRI Room Analyzer:</b> Manhattan-world boundary fitting & camera anchoring.",
-            "🌐 <b>Ground & Room Projection:</b> Real-time local IBL parallax in Solaris.",
-            "🔮 <b>SplatForge:</b> 3D Gaussian Splats to USD environment reconstruction.",
-            "🔥 <b>Crucible Light Studio:</b> Multi-studio light fixture & gobo library.",
+            "[i] <b>Multi-Light Extraction:</b> Automatic cluster detection & inpainting.",
+            " <b>HDRI Room Analyzer:</b> Manhattan-world boundary fitting & camera anchoring.",
+            " <b>Ground & Room Projection:</b> Real-time local IBL parallax in Solaris.",
+            " <b>SplatForge:</b> 3D Gaussian Splats to USD environment reconstruction.",
+            " <b>Crucible Light Studio:</b> Multi-studio light fixture & gobo library.",
         ]
         for f in features:
             flbl = QtWidgets.QLabel(f)
@@ -1996,7 +1996,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.header_card.mousePressEvent = lambda ev: self._show_about_dialog()
         self.title = self.header_card
         
-        self.btn_reload = QtWidgets.QPushButton("🔄 Reload Tool")
+        self.btn_reload = QtWidgets.QPushButton("Reload Tool")
         self.btn_reload.setToolTip("Completely reload all Python modules and refresh the panel UI")
         self.btn_reload.setStyleSheet(
             "QPushButton { background-color: #1e334a; color: #00d2ff; font-weight: bold; "
@@ -2005,7 +2005,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "QPushButton:pressed { background-color: #142436; }"
         )
         
-        self.btn_read_stage = QtWidgets.QPushButton("📥 Read from Stage")
+        self.btn_read_stage = QtWidgets.QPushButton("Read from Stage")
         self.btn_read_stage.setToolTip("Read existing Dome Light & Sun Light settings from /stage and restore previous session")
         self.btn_read_stage.setStyleSheet(
             "QPushButton { background-color: #1e3a2b; color: #00ffaa; font-weight: bold; "
@@ -2025,7 +2025,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         )
         self.btn_reset_defaults.clicked.connect(lambda: self.reset_to_defaults(confirm=True))
 
-        self.btn_toggle_crucible = QtWidgets.QPushButton("🔥 HDRI Library")
+        self.btn_toggle_crucible = QtWidgets.QPushButton("HDRI Library")
         self.btn_toggle_crucible.setCheckable(True)
         self.btn_toggle_crucible.setToolTip("Show / Hide HDRI Library side panel (HDRIs, Gobos, Scrims, Lights, Presets)")
         self.btn_toggle_crucible.setStyleSheet(
@@ -2137,7 +2137,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         self._scroll_layout.addStretch()
         scroll_dome.setWidget(scroll_dome_widget)
-        self.tabs_main.addTab(scroll_dome, "⚡ DomeBreaker")
+        self.tabs_main.addTab(scroll_dome, "DomeBreaker")
 
         # ---- Tab 2: SplatForge (3DGS Environment & Room Reconstructor) ----
         scroll_splat = QtWidgets.QScrollArea()
@@ -2156,7 +2156,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         self._scroll_layout_splat.addStretch()
         scroll_splat.setWidget(scroll_splat_widget)
-        self.tabs_main.addTab(scroll_splat, "🔨 SplatForge")
+        self.tabs_main.addTab(scroll_splat, "SplatForge")
 
         # ---- Tab 3: HDRI Room Analyzer ----
         scroll_analyzer = QtWidgets.QScrollArea()
@@ -2168,18 +2168,18 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._build_hdri_room_analyzer_tab(self._scroll_layout_analyzer)
         self._scroll_layout_analyzer.addStretch()
         scroll_analyzer.setWidget(scroll_analyzer_widget)
-        self.tabs_main.addTab(scroll_analyzer, "📐 HDRI Room Analyzer")
+        self.tabs_main.addTab(scroll_analyzer, "HDRI Room Analyzer")
 
-        self.main_splitter.addWidget(self.tabs_main)
-
-        # Crucible side panel (Right pane)
-        self._build_crucible_section()
-        self.main_splitter.addWidget(self._crucible_container)
-
-        self.main_splitter.setStretchFactor(0, 1)
-        self.main_splitter.setStretchFactor(1, 1)
-        self.main_splitter.setSizes([550, 450])
-        main_layout.addWidget(self.main_splitter, 1)
+        if ENABLE_CRUCIBLE:
+            self.main_splitter.addWidget(self.tabs_main)
+            self._build_crucible_section()
+            self.main_splitter.addWidget(self._crucible_container)
+            self.main_splitter.setStretchFactor(0, 1)
+            self.main_splitter.setStretchFactor(1, 1)
+            self.main_splitter.setSizes([550, 450])
+            main_layout.addWidget(self.main_splitter, 1)
+        else:
+            main_layout.addWidget(self.tabs_main, 1)
 
 
 
@@ -2206,7 +2206,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.txt_hdri.file_dropped.connect(self._on_hdri_dropped)
         self.btn_hdri = QtWidgets.QPushButton("...")
         self.btn_hdri.setMaximumWidth(30)
-        self.btn_clear_hdri = QtWidgets.QPushButton("✕")
+        self.btn_clear_hdri = QtWidgets.QPushButton("X")
         self.btn_clear_hdri.setMaximumWidth(26)
         self.btn_clear_hdri.setToolTip("Remove HDRI map from panel and stage")
         self.btn_clear_hdri.setStyleSheet(
@@ -2224,7 +2224,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.txt_plate.file_dropped.connect(self._on_plate_dropped)
         self.btn_plate = QtWidgets.QPushButton("...")
         self.btn_plate.setMaximumWidth(30)
-        self.btn_clear_plate = QtWidgets.QPushButton("✕")
+        self.btn_clear_plate = QtWidgets.QPushButton("X")
         self.btn_clear_plate.setMaximumWidth(26)
         self.btn_clear_plate.setToolTip("Remove Plate and revert HDRI calibration to original state")
         self.btn_clear_plate.setStyleSheet(
@@ -2279,7 +2279,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         # Free sample download button
         btn_dl_row = QtWidgets.QHBoxLayout()
-        self.btn_download_splat = QtWidgets.QPushButton("📥 Download Free Sample Splat (NVIDIA Flowers)")
+        self.btn_download_splat = QtWidgets.QPushButton("Download Free Sample Splat (NVIDIA Flowers)")
         self.btn_download_splat.setStyleSheet(
             "QPushButton { background-color: #2c3e50; color: #ecf0f1; font-weight: bold; padding: 5px; border-radius: 3px; }"
             "QPushButton:hover { background-color: #34495e; color: #3498db; }"
@@ -2342,7 +2342,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay_dome.setContentsMargins(6, 8, 6, 6)
         lay_dome.setSpacing(6)
         self._populate_splat_dome_tab(lay_dome)
-        self.tabs_splat.addTab(tab_dome, "🌐 360° HDRI Dome")
+        self.tabs_splat.addTab(tab_dome, "360° HDRI Dome")
 
         # Tab 2: 3D Lights & Cloud (hidden per user request; initialized headless so attributes remain valid)
         self._tab_lights = QtWidgets.QWidget()
@@ -2350,7 +2350,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay_lights.setContentsMargins(6, 8, 6, 6)
         lay_lights.setSpacing(6)
         self._populate_splat_lights_tab(lay_lights)
-        # self.tabs_splat.addTab(self._tab_lights, "💡 3D Lights & Cloud")
+        # self.tabs_splat.addTab(self._tab_lights, "[i] 3D Lights & Cloud")
 
         # Tab 3: Room Architecture (USD)
         tab_arch = QtWidgets.QWidget()
@@ -2358,7 +2358,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay_arch.setContentsMargins(6, 8, 6, 6)
         lay_arch.setSpacing(6)
         self._populate_splat_arch_tab(lay_arch)
-        self.tabs_splat.addTab(tab_arch, "🏛️ Room Architecture (USD)")
+        self.tabs_splat.addTab(tab_arch, "Room Architecture (USD)")
 
         # Tab 4: Custom Props & Projection
         tab_props = QtWidgets.QWidget()
@@ -2366,7 +2366,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay_props.setContentsMargins(6, 8, 6, 6)
         lay_props.setSpacing(6)
         self._populate_splat_custom_props_tab(lay_props)
-        self.tabs_splat.addTab(tab_props, "🪑 Custom Props & Projection")
+        self.tabs_splat.addTab(tab_props, "Custom Props & Projection")
 
         # Tab 5: USD Points & Geometry (hidden per user request; initialized headless so attributes remain valid)
         self._tab_points = QtWidgets.QWidget()
@@ -2399,19 +2399,19 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         # Viewport probe buttons
         probe_btns_row = QtWidgets.QHBoxLayout()
-        self.btn_create_probe = QtWidgets.QPushButton("📍 Select / Create Probe")
+        self.btn_create_probe = QtWidgets.QPushButton("Select / Create Probe")
         self.btn_create_probe.setToolTip("Create or select interactive hdri_match_splat_probe camera in /stage.")
         self.btn_create_probe.clicked.connect(self._create_or_select_splat_probe)
 
-        self.btn_snap_probe_cam = QtWidgets.QPushButton("📷 Snap to Camera")
+        self.btn_snap_probe_cam = QtWidgets.QPushButton("Snap to Camera")
         self.btn_snap_probe_cam.setToolTip("Position probe at current Houdini 3D viewport camera position.")
         self.btn_snap_probe_cam.clicked.connect(self._snap_probe_to_viewport_cam)
 
-        self.btn_snap_probe_center = QtWidgets.QPushButton("🎯 Snap to Room Center")
+        self.btn_snap_probe_center = QtWidgets.QPushButton("Snap to Room Center")
         self.btn_snap_probe_center.setToolTip("Center probe inside the Gaussian Splat room interior (robust median centroid).")
         self.btn_snap_probe_center.clicked.connect(self._snap_probe_to_splat_center)
 
-        self.btn_frame_probe = QtWidgets.QPushButton("🔍 Frame Viewport")
+        self.btn_frame_probe = QtWidgets.QPushButton("Frame Viewport")
         self.btn_frame_probe.setToolTip("Focus the Houdini Scene Viewer camera directly on the Splat Probe position.")
         self.btn_frame_probe.clicked.connect(self._frame_probe_in_viewport)
 
@@ -2450,7 +2450,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         # Action buttons for HDRI Baking and Viewport Splat Cloud Display
         cloud_btns_row = QtWidgets.QHBoxLayout()
-        self.btn_vis_splat_scene = QtWidgets.QPushButton("👁️ Show Splat Cloud")
+        self.btn_vis_splat_scene = QtWidgets.QPushButton("Show Splat Cloud")
         self.btn_vis_splat_scene.setStyleSheet(
             "QPushButton { background-color: #2980b9; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #3498db; }"
@@ -2458,7 +2458,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_vis_splat_scene.setToolTip("Toggle or load the 3D Gaussian Splat scene point cloud into Solaris /stage so you can see the room, walls, and probe position in real-time.")
         self.btn_vis_splat_scene.clicked.connect(self._toggle_splat_scene_vis)
 
-        self.btn_display_bakegs = QtWidgets.QPushButton("🔮 Display Native Splats (BakeGS)")
+        self.btn_display_bakegs = QtWidgets.QPushButton("Display Native Splats (BakeGS)")
         self.btn_display_bakegs.setStyleSheet(
             "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #9b59b6; }"
@@ -2471,7 +2471,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay.addRow("Viewport Splats:", cloud_btns_row)
 
         actions_row = QtWidgets.QHBoxLayout()
-        self.btn_bake_splat = QtWidgets.QPushButton("🌐 Bake 360° HDRI from Splat")
+        self.btn_bake_splat = QtWidgets.QPushButton("Bake 360° HDRI from Splat")
         self.btn_bake_splat.setStyleSheet(
             "QPushButton { background-color: #16a085; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #1abc9c; }"
@@ -2510,7 +2510,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         """Populate Tab 2: 3D Lights extraction and Viewport Point Cloud."""
         # Quick Action buttons right at the top of section
         lt_actions_row = QtWidgets.QHBoxLayout()
-        self.btn_bake_splat_usd = QtWidgets.QPushButton("📦 Bake USD Cloud")
+        self.btn_bake_splat_usd = QtWidgets.QPushButton("Bake USD Cloud")
         self.btn_bake_splat_usd.setStyleSheet(
             "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #9b59b6; }"
@@ -2518,7 +2518,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_bake_splat_usd.setToolTip("Explicitly bake or re-bake the active Gaussian Splat scene into an optimized native USD point cloud file (.usd).")
         self.btn_bake_splat_usd.clicked.connect(self._bake_splat_usd_clicked)
 
-        self.btn_extract_splat_lights = QtWidgets.QPushButton("💡 Extract USD Lights")
+        self.btn_extract_splat_lights = QtWidgets.QPushButton("Extract USD Lights")
         self.btn_extract_splat_lights.setStyleSheet(
             "QPushButton { background-color: #d35400; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #e67e22; }"
@@ -2526,7 +2526,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_extract_splat_lights.setToolTip("Analyze 3D Gaussian Splats, infer physical dimensions and normals, and spawn USD RectLights in /stage.")
         self.btn_extract_splat_lights.clicked.connect(self._extract_splat_3d_lights)
 
-        self.btn_clear_splat_lights = QtWidgets.QPushButton("🗑️ Clear Splat Lights")
+        self.btn_clear_splat_lights = QtWidgets.QPushButton("Clear Splat Lights")
         self.btn_clear_splat_lights.setStyleSheet(
             "QPushButton { background-color: #7f8c8d; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #95a5a6; }"
@@ -2611,7 +2611,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         """Populate Tab 3: Room Architecture (USD) reconstruction."""
         # Action buttons
         actions_row = QtWidgets.QHBoxLayout()
-        self.btn_build_room_arch = QtWidgets.QPushButton("🏛️ Analyze & Build Room Architecture")
+        self.btn_build_room_arch = QtWidgets.QPushButton("Analyze & Build Room Architecture")
         self.btn_build_room_arch.setStyleSheet(
             "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #2ecc71; }"
@@ -2619,7 +2619,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_build_room_arch.setToolTip("Analyze splats to detect floor, ceiling, 4 walls, and window openings, and construct physical USD geometry in /stage/room.")
         self.btn_build_room_arch.clicked.connect(self._build_room_architecture_clicked)
 
-        self.btn_clear_room_arch = QtWidgets.QPushButton("🗑️ Clear Room Architecture")
+        self.btn_clear_room_arch = QtWidgets.QPushButton("Clear Room Architecture")
         self.btn_clear_room_arch.setStyleSheet(
             "QPushButton { background-color: #7f8c8d; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #95a5a6; }"
@@ -2627,7 +2627,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_clear_room_arch.setToolTip("Remove /stage/room geometry and restore stage wiring.")
         self.btn_clear_room_arch.clicked.connect(self._clear_room_architecture_clicked)
 
-        self.btn_assign_room_textures = QtWidgets.QPushButton("🎨 Assign HDRI & Portal Textures")
+        self.btn_assign_room_textures = QtWidgets.QPushButton("Assign HDRI & Portal Textures")
         self.btn_assign_room_textures.setVisible(False)
         self.btn_assign_room_textures.setStyleSheet(
             "QPushButton { background-color: #2980b9; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
@@ -2834,7 +2834,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.combo_arch_planar_res.setToolTip("Resolution per planar rectilinear surface texture map (width & height).")
         self.combo_arch_planar_res.currentIndexChanged.connect(lambda: setattr(self, '_planar_textures_dict', None))
 
-        self.btn_bake_planar = QtWidgets.QPushButton("🎨 Bake Planar Textures (High Detail)")
+        self.btn_bake_planar = QtWidgets.QPushButton("Bake Planar Textures (High Detail)")
         self.btn_bake_planar.setVisible(False)
         self.btn_bake_planar.setStyleSheet(
             "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px; }"
@@ -2908,7 +2908,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.sld_arch_scale = SliderDoubleSpinBox(0.001, 100.0, 0.005, 1.0, decimals=4)
         self.sld_arch_scale.setToolTip("Scale factor applied to splat point cloud to calibrate into Houdini meters (default 1.0 = 1 unit is 1 meter).")
 
-        self.btn_arch_autoscale = QtWidgets.QPushButton("📐 Auto-Scale (2.9m Ceiling)")
+        self.btn_arch_autoscale = QtWidgets.QPushButton(" Auto-Scale (2.9m Ceiling)")
         self.btn_arch_autoscale.setStyleSheet(
             "QPushButton { background-color: #2980b9; color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #3498db; }"
@@ -2954,7 +2954,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.chk_splat_lookdev_white.setChecked(True)
         self.chk_splat_lookdev_white.toggled.connect(self._on_splat_lookdev_param_changed)
 
-        self.btn_splat_update_lookdev = QtWidgets.QPushButton("🎯 Update Lookdev Rig")
+        self.btn_splat_update_lookdev = QtWidgets.QPushButton("[*] Update Lookdev Rig")
         self.btn_splat_update_lookdev.setStyleSheet(
             "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 5px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #9b59b6; }"
@@ -2993,7 +2993,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         # Action Buttons Row 1: Add, Pick, Remove, Clear
         btn_row = QtWidgets.QHBoxLayout()
-        self.btn_add_custom_prop = QtWidgets.QPushButton("➕ Add 3D Models...")
+        self.btn_add_custom_prop = QtWidgets.QPushButton("+ Add 3D Models...")
         self.btn_add_custom_prop.setStyleSheet(
             "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #2ecc71; }"
@@ -3001,7 +3001,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_add_custom_prop.setToolTip("Browse and add one or multiple 3D models (.usd, .obj, .fbx, .bgeo, .abc).")
         self.btn_add_custom_prop.clicked.connect(self._on_add_custom_props_clicked)
 
-        self.btn_pick_stage_prop = QtWidgets.QPushButton("🎯 Pick Stage Prim...")
+        self.btn_pick_stage_prop = QtWidgets.QPushButton("Pick Stage Prim...")
         self.btn_pick_stage_prop.setStyleSheet(
             "QPushButton { background-color: #2980b9; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #3498db; }"
@@ -3009,7 +3009,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_pick_stage_prop.setToolTip("Pick an existing USD prim or file from the Solaris stage.")
         self.btn_pick_stage_prop.clicked.connect(self._on_pick_stage_prim_clicked)
 
-        self.btn_remove_custom_prop = QtWidgets.QPushButton("🗑️ Remove")
+        self.btn_remove_custom_prop = QtWidgets.QPushButton("️ Remove")
         self.btn_remove_custom_prop.setStyleSheet(
             "QPushButton { background-color: #c0392b; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #e74c3c; }"
@@ -3017,7 +3017,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_remove_custom_prop.setToolTip("Remove selected prop from list.")
         self.btn_remove_custom_prop.clicked.connect(self._on_remove_custom_prop_clicked)
 
-        self.btn_clear_custom_props = QtWidgets.QPushButton("🧹 Clear All")
+        self.btn_clear_custom_props = QtWidgets.QPushButton(" Clear All")
         self.btn_clear_custom_props.setStyleSheet(
             "QPushButton { background-color: #7f8c8d; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #95a5a6; }"
@@ -3165,7 +3165,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.txt_prop_texture.setToolTip("Path to the texture file (.exr, .hdr, .png, .jpg, .tif) bound to this prop in Solaris.")
         self.txt_prop_texture.textChanged.connect(self._on_prop_param_changed)
 
-        self.btn_browse_prop_texture = QtWidgets.QPushButton("📂 Browse...")
+        self.btn_browse_prop_texture = QtWidgets.QPushButton(" Browse...")
         self.btn_browse_prop_texture.setStyleSheet(
             "QPushButton { background-color: #2980b9; color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #3498db; }"
@@ -3244,7 +3244,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         grp_edit_lay.addRow("Bake Source:", bake_cfg_row)
 
         # Dedicated Bake Button
-        self.btn_bake_prop_texture = QtWidgets.QPushButton("🔥 Bake Prop Texture from Splat / HDRI")
+        self.btn_bake_prop_texture = QtWidgets.QPushButton(" Bake Prop Texture from Splat / HDRI")
         self.btn_bake_prop_texture.setStyleSheet(
             "QPushButton { background-color: #d35400; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #e67e22; }"
@@ -3284,7 +3284,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         # Stage Execution Actions
         actions_box = QtWidgets.QHBoxLayout()
-        self.btn_update_stage_props = QtWidgets.QPushButton("📦 Update Props in Stage")
+        self.btn_update_stage_props = QtWidgets.QPushButton(" Update Props in Stage")
         self.btn_update_stage_props.setStyleSheet(
             "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #9b59b6; }"
@@ -3292,7 +3292,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_update_stage_props.setToolTip("Update Solaris /stage custom prop nodes, snap to floor, and project splat texture.")
         self.btn_update_stage_props.clicked.connect(self._update_custom_props_stage_clicked)
 
-        self.btn_clear_stage_props = QtWidgets.QPushButton("🗑️ Clear from Stage")
+        self.btn_clear_stage_props = QtWidgets.QPushButton("️ Clear from Stage")
         self.btn_clear_stage_props.setStyleSheet(
             "QPushButton { background-color: #7f8c8d; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #95a5a6; }"
@@ -3323,7 +3323,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay.addWidget(info_box)
 
         # 1. Splat Source Group
-        grp_src = QtWidgets.QGroupBox("📁 Gaussian Splat Source")
+        grp_src = QtWidgets.QGroupBox(" Gaussian Splat Source")
         grp_src_lay = QtWidgets.QFormLayout(grp_src)
         grp_src_lay.setContentsMargins(6, 8, 6, 6)
         grp_src_lay.setSpacing(6)
@@ -3331,9 +3331,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         src_row = QtWidgets.QHBoxLayout()
         self.txt_points_splat_file = QtWidgets.QLineEdit()
         self.txt_points_splat_file.setPlaceholderText("Path to .ply Gaussian Splat file...")
-        self.btn_browse_points_splat = QtWidgets.QPushButton("📂 Browse...")
+        self.btn_browse_points_splat = QtWidgets.QPushButton(" Browse...")
         self.btn_browse_points_splat.clicked.connect(self._on_points_splat_browse_clicked)
-        self.btn_use_active_splat = QtWidgets.QPushButton("🔄 Use Active Splat")
+        self.btn_use_active_splat = QtWidgets.QPushButton(" Use Active Splat")
         self.btn_use_active_splat.setToolTip("Sync and use the splat currently loaded in the HDRI Dome tab.")
         self.btn_use_active_splat.clicked.connect(self._on_use_active_splat_clicked)
         src_row.addWidget(self.txt_points_splat_file)
@@ -3375,7 +3375,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.combo_points_scale_preset.setToolTip("Quick preset unit conversions to Houdini meters.")
         self.combo_points_scale_preset.currentIndexChanged.connect(self._on_points_scale_preset_changed)
 
-        self.btn_points_autoscale = QtWidgets.QPushButton("📐 Auto-Calibrate (2.9m Ceiling)")
+        self.btn_points_autoscale = QtWidgets.QPushButton(" Auto-Calibrate (2.9m Ceiling)")
         self.btn_points_autoscale.setStyleSheet(
             "QPushButton { background-color: #2980b9; color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #3498db; }"
@@ -3485,7 +3485,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_convert_load_points.setToolTip("Convert Gaussian Splat into USD Points and load into Solaris /stage as 'splat_points_ref'.")
         self.btn_convert_load_points.clicked.connect(self._convert_and_load_splat_points)
 
-        self.btn_export_standalone_points = QtWidgets.QPushButton("💾 Export Standalone .usd")
+        self.btn_export_standalone_points = QtWidgets.QPushButton(" Export Standalone .usd")
         self.btn_export_standalone_points.setStyleSheet(
             "QPushButton { background-color: #2980b9; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #3498db; }"
@@ -3498,14 +3498,14 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         grp_pts_lay.addRow(act_row_1)
 
         act_row_2 = QtWidgets.QHBoxLayout()
-        self.btn_toggle_points_vis = QtWidgets.QPushButton("👁️ Toggle Points Visibility")
+        self.btn_toggle_points_vis = QtWidgets.QPushButton("️ Toggle Points Visibility")
         self.btn_toggle_points_vis.setStyleSheet(
             "QPushButton { background-color: #34495e; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #4a6278; }"
         )
         self.btn_toggle_points_vis.clicked.connect(self._toggle_splat_points_vis)
 
-        self.btn_clear_points_stage = QtWidgets.QPushButton("🗑️ Clear Points from Stage")
+        self.btn_clear_points_stage = QtWidgets.QPushButton("️ Clear Points from Stage")
         self.btn_clear_points_stage.setStyleSheet(
             "QPushButton { background-color: #7f8c8d; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #95a5a6; }"
@@ -3543,7 +3543,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay.addWidget(grp_pts)
 
         # 3. Geometry Texturing from Splats Group
-        grp_tex = QtWidgets.QGroupBox("🎨 Texture Geometry from Gaussian Splats")
+        grp_tex = QtWidgets.QGroupBox(" Texture Geometry from Gaussian Splats")
         grp_tex_lay = QtWidgets.QFormLayout(grp_tex)
         grp_tex_lay.setContentsMargins(6, 8, 6, 6)
         grp_tex_lay.setSpacing(6)
@@ -3556,7 +3556,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.combo_texture_target_mesh.addItem("/stage/room/ceiling")
         self.combo_texture_target_mesh.setToolTip("Target USD Mesh primitive path in /stage to receive splat textures/colors.")
 
-        self.btn_refresh_stage_meshes = QtWidgets.QPushButton("🔄 Refresh Meshes")
+        self.btn_refresh_stage_meshes = QtWidgets.QPushButton(" Refresh Meshes")
         self.btn_refresh_stage_meshes.setToolTip("Scan active Solaris stage for all UsdGeom.Mesh primitives.")
         self.btn_refresh_stage_meshes.clicked.connect(self._refresh_stage_meshes)
 
@@ -3579,7 +3579,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.sld_texture_radius.setToolTip("Sampling search radius in meters when transferring splat colors to vertices.")
         grp_tex_lay.addRow("Search Radius (m):", self.sld_texture_radius)
 
-        self.btn_apply_mesh_texturing = QtWidgets.QPushButton("🎨 Texture Selected Mesh from Splats")
+        self.btn_apply_mesh_texturing = QtWidgets.QPushButton(" Texture Selected Mesh from Splats")
         self.btn_apply_mesh_texturing.setStyleSheet(
             "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #9b59b6; }"
@@ -3730,7 +3730,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             cx, cy, cz = dim["centroid"]
             warning_tag = ""
             if dim["raw_height"] > 6.0 and abs(scale_val - 1.0) < 1e-4:
-                warning_tag = " ⚠️ (Unscaled photogrammetry units! Click Auto-Calibrate)"
+                warning_tag = " [!] (Unscaled photogrammetry units! Click Auto-Calibrate)"
             txt = f"W: {w:.2f}m × H: {h:.2f}m × D: {d:.2f}m | Centroid: ({cx:.2f}, {cy:.2f}, {cz:.2f})m (1 unit = 1m){warning_tag}"
             self.lbl_points_dimensions.setText(txt)
             if warning_tag:
@@ -4632,7 +4632,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.log_error(f"Failed to update custom props in stage: {e}", e)
         finally:
             self.btn_update_stage_props.setEnabled(True)
-            self.btn_update_stage_props.setText("📦 Update Props in Stage")
+            self.btn_update_stage_props.setText(" Update Props in Stage")
 
     def _clear_custom_props_stage_clicked(self):
         """Remove custom props nodes from Solaris /stage."""
@@ -4718,10 +4718,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             dlg.setText("No 3D Gaussian Splat (.ply) or 360° HDRI is currently loaded to bake textures from.")
             dlg.setInformativeText("Choose an option to supply splats or textures for this prop:")
 
-            btn_sample = dlg.addButton("🌟 Load Sample Splat (Room)", QtWidgets.QMessageBox.ActionRole)
-            btn_browse_splat = dlg.addButton("📂 Browse .ply Splat...", QtWidgets.QMessageBox.ActionRole)
-            btn_browse_hdri = dlg.addButton("🌐 Browse 360° HDRI...", QtWidgets.QMessageBox.ActionRole)
-            btn_browse_tex = dlg.addButton("🎨 Pick Prop Texture...", QtWidgets.QMessageBox.ActionRole)
+            btn_sample = dlg.addButton(" Load Sample Splat (Room)", QtWidgets.QMessageBox.ActionRole)
+            btn_browse_splat = dlg.addButton(" Browse .ply Splat...", QtWidgets.QMessageBox.ActionRole)
+            btn_browse_hdri = dlg.addButton(" Browse 360° HDRI...", QtWidgets.QMessageBox.ActionRole)
+            btn_browse_tex = dlg.addButton(" Pick Prop Texture...", QtWidgets.QMessageBox.ActionRole)
             btn_cancel = dlg.addButton("Cancel", QtWidgets.QMessageBox.RejectRole)
             dlg.exec_()
 
@@ -4866,7 +4866,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         out_path = os.path.join(out_dir, f"{p_name}_splat_baked.exr").replace("\\", "/")
 
         self.btn_bake_prop_texture.setEnabled(False)
-        self.btn_bake_prop_texture.setText(f"🔥 Baking '{p_name}' Texture (0%)...")
+        self.btn_bake_prop_texture.setText(f" Baking '{p_name}' Texture (0%)...")
         if hasattr(self, 'pbar_prop_bake'):
             self.pbar_prop_bake.setValue(0)
             self.pbar_prop_bake.setFormat(f"Baking '{p_name}' Texture: 0%")
@@ -4892,11 +4892,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         if hasattr(self, 'pbar_prop_bake'):
             self.pbar_prop_bake.setValue(pct)
             self.pbar_prop_bake.setFormat(f"Baking Prop Texture: {pct}%")
-        self.btn_bake_prop_texture.setText(f"🔥 Baking Prop Texture ({pct}%)...")
+        self.btn_bake_prop_texture.setText(f" Baking Prop Texture ({pct}%)...")
 
     def _on_prop_bake_finished(self, out_path):
         self.btn_bake_prop_texture.setEnabled(True)
-        self.btn_bake_prop_texture.setText("🔥 Bake Prop Texture from Splat / HDRI")
+        self.btn_bake_prop_texture.setText(" Bake Prop Texture from Splat / HDRI")
         if hasattr(self, 'pbar_prop_bake'):
             self.pbar_prop_bake.setValue(100)
             self.pbar_prop_bake.setFormat("Prop Texture Baked (100%)")
@@ -4937,7 +4937,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _on_prop_bake_failed(self, error_msg):
         self.btn_bake_prop_texture.setEnabled(True)
-        self.btn_bake_prop_texture.setText("🔥 Bake Prop Texture from Splat / HDRI")
+        self.btn_bake_prop_texture.setText(" Bake Prop Texture from Splat / HDRI")
         if hasattr(self, 'pbar_prop_bake'):
             self.pbar_prop_bake.setValue(0)
             self.pbar_prop_bake.setFormat("Bake Failed")
@@ -5035,7 +5035,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             if not room_data:
                 self.log("Failed to extract architectural boundaries from splats.", "ERROR")
                 self.btn_build_room_arch.setEnabled(True)
-                self.btn_build_room_arch.setText("🏛️ Analyze & Build Room Architecture")
+                self.btn_build_room_arch.setText("Analyze & Build Room Architecture")
                 return
 
             # Auto-scale check: if scale was 1.0 but ceiling is unscaled photogrammetry units (>6m), auto-calibrate to standard 2.9m ceiling
@@ -5083,7 +5083,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                         if m_file and os.path.isfile(m_file):
                             p["mesh_file"] = m_file
                             p["shape"] = "mesh"
-                            self.log(f"  ✓ Prop '{p.get('name')}' reconstructed -> {os.path.basename(m_file)}", "INFO")
+                            self.log(f"  [OK] Prop '{p.get('name')}' reconstructed -> {os.path.basename(m_file)}", "INFO")
                     except Exception as ex_m:
                         self.log(f"Warning: Prop mesh calculation for '{p.get('name')}' failed: {ex_m}. Falling back to proxy primitive.", "WARNING")
 
@@ -5447,7 +5447,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.log_error(f"Failed to build room architecture: {e}", e)
         finally:
             self.btn_build_room_arch.setEnabled(True)
-            self.btn_build_room_arch.setText("🏛️ Analyze & Build Room Architecture")
+            self.btn_build_room_arch.setText("Analyze & Build Room Architecture")
 
     def _on_portal_intensity_changed(self, val):
         """Live update physical portal light intensities in /stage without full scene rebuild."""
@@ -5729,7 +5729,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         probe_pos = (float(room_data["center"][0]), float(room_data["floor_y"]) + 1.45, float(room_data["center"][2]))
 
         self.btn_bake_planar.setEnabled(False)
-        self.btn_bake_planar.setText(f"🎨 Baking Planar ({res_val}x{res_val})...")
+        self.btn_bake_planar.setText(f" Baking Planar ({res_val}x{res_val})...")
         if hasattr(self, 'pbar_planar'):
             self.pbar_planar.setVisible(True)
             self.pbar_planar.setValue(0)
@@ -5750,13 +5750,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.pbar_planar.setValue(pct)
             self.pbar_planar.setFormat(f"Baking {name}: {pct}%")
         if hasattr(self, 'btn_bake_planar'):
-            self.btn_bake_planar.setText(f"🎨 Baking {name} ({pct}%)...")
+            self.btn_bake_planar.setText(f" Baking {name} ({pct}%)...")
 
     def _on_planar_bake_finished(self, tex_dict):
         self._planar_textures_dict = dict(tex_dict)
         if hasattr(self, 'btn_bake_planar'):
             self.btn_bake_planar.setEnabled(True)
-            self.btn_bake_planar.setText("🎨 Bake Planar Textures (High Detail)")
+            self.btn_bake_planar.setText("Bake Planar Textures (High Detail)")
         if hasattr(self, 'pbar_planar'):
             self.pbar_planar.setValue(100)
             self.pbar_planar.setFormat("Planar Textures Ready (100%)")
@@ -5769,7 +5769,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
     def _on_planar_bake_failed(self, err_msg):
         if hasattr(self, 'btn_bake_planar'):
             self.btn_bake_planar.setEnabled(True)
-            self.btn_bake_planar.setText("🎨 Bake Planar Textures (High Detail)")
+            self.btn_bake_planar.setText("Bake Planar Textures (High Detail)")
         if hasattr(self, 'pbar_planar'):
             self.pbar_planar.setValue(0)
             self.pbar_planar.setFormat("Planar Bake Failed")
@@ -6003,7 +6003,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.log_error(f"Failed to assign room textures: {e}", e)
         finally:
             self.btn_assign_room_textures.setEnabled(True)
-            self.btn_assign_room_textures.setText("🎨 Assign HDRI & Portal Textures")
+            self.btn_assign_room_textures.setText("Assign HDRI & Portal Textures")
 
     def _on_splat_file_dropped(self, path):
         if path and (path.lower().endswith(".ply") or path.lower().endswith(".splat")):
@@ -6079,11 +6079,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._splat_download_worker.start()
 
     def _on_splat_download_progress(self, percent, msg):
-        self.btn_download_splat.setText(f"📥 {percent}% - {msg}")
+        self.btn_download_splat.setText(f" {percent}% - {msg}")
 
     def _on_splat_download_finished(self, ply_path):
         self.btn_download_splat.setEnabled(True)
-        self.btn_download_splat.setText("📥 Download Free Sample Splat (NVIDIA Flowers)")
+        self.btn_download_splat.setText("Download Free Sample Splat (NVIDIA Flowers)")
         self.txt_splat_file.setText(ply_path)
         self._load_splat_scene(ply_path)
         self.log(f"Sample splat ready: {ply_path}", "SUCCESS")
@@ -6092,7 +6092,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _on_splat_download_failed(self, error_msg):
         self.btn_download_splat.setEnabled(True)
-        self.btn_download_splat.setText("📥 Download Free Sample Splat (Retry)")
+        self.btn_download_splat.setText(" Download Free Sample Splat (Retry)")
         self.log_error("Sample splat download failed", error_msg)
         if hou.isUIAvailable():
             hou.ui.displayMessage(f"Failed to download sample splat:\n{error_msg}", severity=hou.severityType.Error)
@@ -6216,7 +6216,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         out_path = os.path.join(out_dir, f"{base_name}_splat_baked_hdri.exr").replace(chr(92), "/")
 
         self.btn_bake_splat.setEnabled(False)
-        self.btn_bake_splat.setText("🌐 Baking 360° HDRI (0%)...")
+        self.btn_bake_splat.setText(" Baking 360° HDRI (0%)...")
         if hasattr(self, 'pbar_splat'):
             self.pbar_splat.setValue(0)
             self.pbar_splat.setFormat("Baking 360° HDRI: 0%")
@@ -6241,11 +6241,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         if hasattr(self, 'pbar_splat'):
             self.pbar_splat.setValue(pct)
             self.pbar_splat.setFormat(f"Baking 360° HDRI: {pct}%")
-        self.btn_bake_splat.setText(f"🌐 Baking 360° HDRI ({pct}%)...")
+        self.btn_bake_splat.setText(f" Baking 360° HDRI ({pct}%)...")
 
     def _on_splat_bake_finished(self, out_path):
         self.btn_bake_splat.setEnabled(True)
-        self.btn_bake_splat.setText("🌐 Bake 360° HDRI from Splat")
+        self.btn_bake_splat.setText("Bake 360° HDRI from Splat")
         if hasattr(self, 'pbar_splat'):
             self.pbar_splat.setValue(100)
             self.pbar_splat.setFormat("360° HDRI Baked Successfully (100%)")
@@ -6285,7 +6285,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _on_splat_bake_failed(self, error_msg):
         self.btn_bake_splat.setEnabled(True)
-        self.btn_bake_splat.setText("🌐 Bake 360° HDRI from Splat")
+        self.btn_bake_splat.setText("Bake 360° HDRI from Splat")
         if hasattr(self, 'pbar_splat'):
             self.pbar_splat.setValue(0)
             self.pbar_splat.setFormat("Bake Failed")
@@ -6423,7 +6423,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 ref_node.bypass(True)
                 self.log("Splat Scene Point Cloud is now HIDDEN in viewport.", "INFO")
                 if hasattr(self, 'btn_vis_splat_scene'):
-                    self.btn_vis_splat_scene.setText("👁️ Show Splat Cloud")
+                    self.btn_vis_splat_scene.setText("Show Splat Cloud")
                     self.btn_vis_splat_scene.setStyleSheet(
                         "QPushButton { background-color: #2980b9; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
                         "QPushButton:hover { background-color: #3498db; }"
@@ -6474,7 +6474,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     pass
             self.log(f"Splat Scene Point Cloud loaded in Solaris viewport: {usd_path}", "SUCCESS")
             if hasattr(self, 'btn_vis_splat_scene'):
-                self.btn_vis_splat_scene.setText("👁️ Hide Splat Cloud")
+                self.btn_vis_splat_scene.setText("️ Hide Splat Cloud")
                 self.btn_vis_splat_scene.setStyleSheet(
                     "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
                     "QPushButton:hover { background-color: #2ecc71; }"
@@ -6632,13 +6632,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 self.log(f"Native Splats (BakeGS) {'SHOWN' if is_visible else 'HIDDEN'} in viewport.", "INFO")
                 if hasattr(self, 'btn_display_bakegs'):
                     if is_visible:
-                        self.btn_display_bakegs.setText("🔮 Hide Native Splats (BakeGS)")
+                        self.btn_display_bakegs.setText(" Hide Native Splats (BakeGS)")
                         self.btn_display_bakegs.setStyleSheet(
                             "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
                             "QPushButton:hover { background-color: #2ecc71; }"
                         )
                     else:
-                        self.btn_display_bakegs.setText("🔮 Display Native Splats (BakeGS)")
+                        self.btn_display_bakegs.setText("Display Native Splats (BakeGS)")
                         self.btn_display_bakegs.setStyleSheet(
                             "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
                             "QPushButton:hover { background-color: #9b59b6; }"
@@ -6697,7 +6697,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
             self.log(f"Native Splats (BakeGS) loaded in Solaris viewport & /stage: {sop_imp.path()}", "SUCCESS")
             if hasattr(self, 'btn_display_bakegs'):
-                self.btn_display_bakegs.setText("🔮 Hide Native Splats (BakeGS)")
+                self.btn_display_bakegs.setText(" Hide Native Splats (BakeGS)")
                 self.btn_display_bakegs.setStyleSheet(
                     "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
                     "QPushButton:hover { background-color: #2ecc71; }"
@@ -7033,19 +7033,19 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         room_lay.addRow("Room Presets:", room_pre_box)
 
         align_btn_box = QtWidgets.QHBoxLayout()
-        btn_align_room = QtWidgets.QPushButton("📐 Auto-Fit Room Box Dimensions")
+        btn_align_room = QtWidgets.QPushButton(" Auto-Fit Room Box Dimensions")
         btn_align_room.setStyleSheet("background-color: #2b3a4a; color: #58a6ff; font-weight: bold; padding: 4px; border-radius: 4px;")
         btn_align_room.setToolTip("Automatically analyze the equirectangular panorama to solve physical room width, depth, and height.")
         btn_align_room.clicked.connect(self._on_auto_align_room_to_hdri)
         align_btn_box.addWidget(btn_align_room, 2)
 
-        btn_align_yaw = QtWidgets.QPushButton("🧭 Align Room Yaw")
+        btn_align_yaw = QtWidgets.QPushButton(" Align Room Yaw")
         btn_align_yaw.setStyleSheet("background-color: #1f3d3d; color: #73daca; font-weight: bold; padding: 4px; border-radius: 4px;")
         btn_align_yaw.setToolTip("Analyze the HDRI to detect the dominant room wall angles and rotate Room & Dome yaw to align with the room.")
         btn_align_yaw.clicked.connect(self._on_auto_align_room_yaw)
         align_btn_box.addWidget(btn_align_yaw, 2)
 
-        btn_reset_yaw = QtWidgets.QPushButton("🔄 Reset (0°)")
+        btn_reset_yaw = QtWidgets.QPushButton(" Reset (0°)")
         btn_reset_yaw.setStyleSheet("background-color: #333333; color: #e6e6e6; font-weight: bold; padding: 4px; border-radius: 4px;")
         btn_reset_yaw.setToolTip("Reset room orientation (yaw) to 0.0° to align directly with the native HDRI panorama coordinates.")
         btn_reset_yaw.clicked.connect(self._on_reset_room_yaw)
@@ -7092,7 +7092,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         room_lay.addRow("Room Box Yaw:", yaw_row)
 
         yaw_opts_row = QtWidgets.QHBoxLayout()
-        self.chk_link_room_dome_yaw = QtWidgets.QCheckBox("🔗 Link to DomeLight Yaw")
+        self.chk_link_room_dome_yaw = QtWidgets.QCheckBox(" Link to DomeLight Yaw")
         self.chk_link_room_dome_yaw.setChecked(False)
         self.chk_link_room_dome_yaw.setToolTip(
             "When unchecked (default), rotating Room Box Yaw rotates only the 3D room geometry,\n"
@@ -7198,7 +7198,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.combo_ground_planar_res.setCurrentIndex(1)  # Default 4K
         self.combo_ground_planar_res.setToolTip("Resolution per planar rectilinear surface texture map (width & height).")
 
-        self.btn_bake_ground_planar = QtWidgets.QPushButton("🎨 Bake Planar Textures")
+        self.btn_bake_ground_planar = QtWidgets.QPushButton("Bake Planar Textures")
         self.btn_bake_ground_planar.setStyleSheet(
             "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 3px 8px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #2ecc71; }"
@@ -7264,7 +7264,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay.addRow("Renderer Target:", self.combo_renderer_target)
 
         # Action Button
-        self.btn_create_ground_geometry = QtWidgets.QPushButton("📐 Build Solaris USD Projection Mesh")
+        self.btn_create_ground_geometry = QtWidgets.QPushButton(" Build Solaris USD Projection Mesh")
         self.btn_create_ground_geometry.setStyleSheet(
             "QPushButton { background-color: #1a3a5a; color: #00d2ff; font-weight: bold; padding: 8px; font-size: 12px; border: 1px solid #2e6b9e; border-radius: 4px; }"
             "QPushButton:hover { background-color: #265585; color: #ffffff; }"
@@ -7292,10 +7292,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.widget_room_controls.setVisible(is_room)
         if hasattr(self, 'btn_bake_ground_planar'):
             if is_room:
-                self.btn_bake_ground_planar.setText("🎨 Bake Planar Room Textures")
+                self.btn_bake_ground_planar.setText(" Bake Planar Room Textures")
                 self.btn_bake_ground_planar.setToolTip("Bake distortion-free rectilinear OpenEXR textures for floor, ceiling, and all 4 walls.")
             else:
-                self.btn_bake_ground_planar.setText("🎨 Bake Planar Ground Texture")
+                self.btn_bake_ground_planar.setText(" Bake Planar Ground Texture")
                 self.btn_bake_ground_planar.setToolTip("Bake distortion-free rectilinear OpenEXR top-view planar texture for the ground disc.")
         if not getattr(self, '_restoring_state', False) and not getattr(self, '_initializing', False):
             if is_room and hasattr(self, 'chk_snap_to_room'):
@@ -7609,7 +7609,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         scan_box = QtWidgets.QHBoxLayout()
         scan_box.setSpacing(6)
 
-        self.btn_analyze_hotspots = QtWidgets.QPushButton("🔍 Analyze Hotspots")
+        self.btn_analyze_hotspots = QtWidgets.QPushButton(" Analyze Hotspots")
         self.btn_analyze_hotspots.setStyleSheet(
             "QPushButton { font-weight: bold; background-color: #2b3a4a; color: #66ccff; padding: 4px 8px; border-radius: 3px; }"
             "QPushButton:hover { background-color: #384e66; color: #ffffff; }"
@@ -7650,7 +7650,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         )
         snap_row.addWidget(self.chk_snap_to_room, 3)
 
-        btn_snap_now = QtWidgets.QPushButton("🧲 Snap Now")
+        btn_snap_now = QtWidgets.QPushButton(" Snap Now")
         btn_snap_now.setStyleSheet("padding: 2px 6px; font-weight: bold;")
         btn_snap_now.setToolTip("Force snap all practical lights to current room box walls and orientation immediately.")
         btn_snap_now.clicked.connect(self._on_snap_lights_now)
@@ -7688,7 +7688,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         )
         lay.addRow(self.chk_extract_inpaint)
 
-        self.btn_extract_lights = QtWidgets.QPushButton("💡 Extract Practical Lights to USD Stage")
+        self.btn_extract_lights = QtWidgets.QPushButton("[i] Extract Practical Lights to USD Stage")
         self.btn_extract_lights.setStyleSheet(
             "QPushButton { font-weight: bold; background-color: #2b3a4a; color: #66ccff; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #384e66; color: #ffffff; }"
@@ -7726,7 +7726,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.txt_practicals_lg.setToolTip("Light group tag assigned to extracted Practical Rect Lights.")
         lay.addRow("Practicals Light Group:", self.txt_practicals_lg)
 
-        self.btn_setup_aovs = QtWidgets.QPushButton("🏷️ Assign Light Groups to Stage Lights")
+        self.btn_setup_aovs = QtWidgets.QPushButton("️ Assign Light Groups to Stage Lights")
         self.btn_setup_aovs.setStyleSheet("padding: 6px; font-weight: bold; background: #1a3344; color: #4db8ff; border-radius: 4px;")
         self.btn_setup_aovs.setToolTip("Sets the AOV Light Group and LPE Tag parameters on all active lights in /stage for Karma, Arnold, and Redshift.")
         self.btn_setup_aovs.clicked.connect(self._apply_light_groups_to_stage)
@@ -7767,17 +7767,17 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         # Scale Presets
         presets_box = QtWidgets.QHBoxLayout()
         presets_box.setSpacing(4)
-        btn_pre_vfx = QtWidgets.QPushButton("🎬 VFX Standard (30cm)")
+        btn_pre_vfx = QtWidgets.QPushButton(" VFX Standard (30cm)")
         btn_pre_vfx.setStyleSheet("padding: 2px 5px; font-size: 11px;")
         btn_pre_vfx.setToolTip("Industry VFX Standard: 15cm radius (30cm / 12in diameter) calibration balls on a 1.0m stand.")
         btn_pre_vfx.clicked.connect(lambda: self._apply_lookdev_preset(0.15, 0.45, 1.0, True))
 
-        btn_pre_macro = QtWidgets.QPushButton("🔍 Tabletop (12cm)")
+        btn_pre_macro = QtWidgets.QPushButton(" Tabletop (12cm)")
         btn_pre_macro.setStyleSheet("padding: 2px 5px; font-size: 11px;")
         btn_pre_macro.setToolTip("Compact setup: 6cm radius (12cm diameter) balls at 0.4m height for table / prop lookdev.")
         btn_pre_macro.clicked.connect(lambda: self._apply_lookdev_preset(0.06, 0.20, 0.40, True))
 
-        btn_pre_floor = QtWidgets.QPushButton("📐 Floor (30cm)")
+        btn_pre_floor = QtWidgets.QPushButton(" Floor (30cm)")
         btn_pre_floor.setStyleSheet("padding: 2px 5px; font-size: 11px;")
         btn_pre_floor.setToolTip("Resting directly on ground/floor plane at Y = radius.")
         btn_pre_floor.clicked.connect(lambda: self._apply_lookdev_preset(0.15, 0.45, 0.15, False))
@@ -7819,7 +7819,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         opts_box.addStretch()
         lay.addRow("Rig Options:", opts_box)
 
-        self.btn_create_lookdev_rig = QtWidgets.QPushButton("🔮 Add / Update Lookdev Spheres")
+        self.btn_create_lookdev_rig = QtWidgets.QPushButton(" Add / Update Lookdev Spheres")
         self.btn_create_lookdev_rig.setStyleSheet(
             "QPushButton { font-weight: bold; background-color: #3b2a4a; color: #cc99ff; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #4f3866; color: #ffffff; }"
@@ -7846,7 +7846,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         )
         lay.addWidget(self.btn_create_network)
 
-        self.btn_merge_networks = QtWidgets.QPushButton("🔀 Merge Networks into Single Flow")
+        self.btn_merge_networks = QtWidgets.QPushButton(" Merge Networks into Single Flow")
         self.btn_merge_networks.setStyleSheet(
             "background-color: #2e6b9e; color: white; font-weight: bold; padding: 6px; font-size: 11px;"
         )
@@ -7859,7 +7859,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.chk_auto_bake.setToolTip("Automatically bake calibrated HDRI in a background worker thread and update viewport Dome Light in real-time.")
         lay.addWidget(self.chk_auto_bake)
 
-        self.btn_bake_hdri = QtWidgets.QPushButton("💾 Bake Calibrated HDRI & Textures to $HIP")
+        self.btn_bake_hdri = QtWidgets.QPushButton(" Bake Calibrated HDRI & Textures to $HIP")
         self.btn_bake_hdri.setStyleSheet(
             "QPushButton { background-color: #1a5276; color: #ffffff; font-weight: bold; padding: 8px; font-size: 11px; border-radius: 4px; border: 1px solid #2980b9; }"
             "QPushButton:hover { background-color: #2471a3; color: #ffffff; }"
@@ -7883,10 +7883,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_detect_sun.setVisible(False)
 
         # Single projection mesh button is maintained in Ground & Room Projection section (self.btn_create_ground_geometry)
-        self.btn_action_projection = QtWidgets.QPushButton("📐 Build Solaris USD Projection Mesh")
+        self.btn_action_projection = QtWidgets.QPushButton(" Build Solaris USD Projection Mesh")
         self.btn_action_projection.setVisible(False)
 
-        self.btn_action_aovs = QtWidgets.QPushButton("🏷️ Light Groups")
+        self.btn_action_aovs = QtWidgets.QPushButton("️ Light Groups")
         self.btn_action_aovs.setVisible(False)
         self.btn_action_aovs.clicked.connect(self._apply_light_groups_to_stage)
 
@@ -7968,7 +7968,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "HDRI Only",
             "Plate Only"
         ])
-        self.btn_popout_preview = QtWidgets.QPushButton("⧉ Pop Out")
+        self.btn_popout_preview = QtWidgets.QPushButton("Pop Out")
         self.btn_popout_preview.setToolTip("Open large resizable preview inspector (or double-click any preview image)")
         self.btn_popout_preview.setStyleSheet(
             "QPushButton { background-color: #24272c; color: #bbb; border: 1px solid #363a42; "
@@ -8215,7 +8215,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._crucible_layout.setSpacing(4)
 
         # Pop Out button directly on Crucible Header
-        self.btn_popout_crucible = QtWidgets.QPushButton("⧉ Pop Out", self._crucible_container)
+        self.btn_popout_crucible = QtWidgets.QPushButton("Pop Out", self._crucible_container)
         self.btn_popout_crucible.setToolTip("Open HDRI Library in a floating window")
         self.btn_popout_crucible.setStyleSheet(
             "QPushButton { background-color: #2a2a2a; color: #bbb; border: 1px solid #444; "
@@ -8225,9 +8225,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_popout_crucible.clicked.connect(self._popout_crucible_window)
 
         # Hidden stubs for compatibility
-        self.btn_crucible_merge = QtWidgets.QPushButton("🔀 Merge Flow", self._crucible_container)
+        self.btn_crucible_merge = QtWidgets.QPushButton("Merge Flow", self._crucible_container)
         self.btn_crucible_merge.hide()
-        self.btn_close_crucible = QtWidgets.QPushButton("✕", self._crucible_container)
+        self.btn_close_crucible = QtWidgets.QPushButton("X", self._crucible_container)
         self.btn_close_crucible.hide()
 
         # Embedded Crucible Panel (lazy loaded on user request)
@@ -8332,7 +8332,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             fw_layout.setContentsMargins(4, 4, 4, 4)
 
             dock_bar = QtWidgets.QHBoxLayout()
-            btn_dock = QtWidgets.QPushButton("⬇ Dock into HDRI Match Panel")
+            btn_dock = QtWidgets.QPushButton("Dock into HDRI Match Panel")
             btn_dock.setStyleSheet(
                 "font-weight: bold; padding: 4px 12px; background: #274768; color: #00d2ff; border-radius: 4px;"
             )
@@ -8347,7 +8347,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._crucible_container.layout().removeWidget(self._crucible_panel)
         self._crucible_fw_layout.addWidget(self._crucible_panel, 1)
         self._crucible_container.hide()
-        self.btn_popout_crucible.setText("⬇ Dock In")
+        self.btn_popout_crucible.setText("Dock In")
         self._floating_crucible_win.show()
         self._floating_crucible_win.raise_()
 
@@ -8357,7 +8357,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._crucible_fw_layout.removeWidget(self._crucible_panel)
         self._crucible_container.layout().addWidget(self._crucible_panel, 1)
         self._floating_crucible_win.hide()
-        self.btn_popout_crucible.setText("⧉ Pop Out")
+        self.btn_popout_crucible.setText("Pop Out")
         self._set_crucible_visible(True)
 
     # ------------------------------------------------------------------
@@ -8375,7 +8375,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         intro_lay.setContentsMargins(6, 6, 6, 6)
         intro_lay.setSpacing(4)
 
-        title_lbl = QtWidgets.QLabel("📐 360° HDRI Room Dimension Analyzer")
+        title_lbl = QtWidgets.QLabel(" 360° HDRI Room Dimension Analyzer")
         title_lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #00d2ff;")
         intro_lay.addWidget(title_lbl)
 
@@ -8441,7 +8441,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         act_btn_row = QtWidgets.QHBoxLayout()
         act_btn_row.setSpacing(6)
 
-        self.btn_analyze_hdri_room = QtWidgets.QPushButton("🔍 Analyze Room Boundaries")
+        self.btn_analyze_hdri_room = QtWidgets.QPushButton("Analyze Room Boundaries")
         self.btn_analyze_hdri_room.setStyleSheet(
             "QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0088b3, stop:1 #005573); "
             "color: #ffffff; font-weight: bold; font-size: 12px; border: 1px solid #00bbee; "
@@ -8452,7 +8452,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_analyze_hdri_room.clicked.connect(self._on_analyze_hdri_room_clicked)
         act_btn_row.addWidget(self.btn_analyze_hdri_room, 1)
 
-        self.btn_auto_align_room = QtWidgets.QPushButton("📐 Auto-Align Room to HDRI")
+        self.btn_auto_align_room = QtWidgets.QPushButton("Auto-Align Room to HDRI")
         self.btn_auto_align_room.setStyleSheet(
             "QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2980b9, stop:1 #1a5276); "
             "color: #ffffff; font-weight: bold; font-size: 12px; border: 1px solid #3498db; "
@@ -8488,7 +8488,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         prev_lay.setSpacing(6)
 
         self.lbl_ana_preview = ClickablePreviewLabel(
-            "Boundary overlay preview will appear here upon analysis\n(💡 Double-click to open enlarged screen view)"
+            "Boundary overlay preview will appear here upon analysis\n([i] Double-click to open enlarged screen view)"
         )
         self.lbl_ana_preview.setAlignment(QtCore.Qt.AlignCenter)
         self.lbl_ana_preview.setMinimumHeight(180)
@@ -8515,7 +8515,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             legend_row.addWidget(lbl_leg)
         legend_row.addStretch()
 
-        self.btn_ana_enlarge = QtWidgets.QPushButton("⛶ Enlarge View")
+        self.btn_ana_enlarge = QtWidgets.QPushButton("Enlarge View")
         self.btn_ana_enlarge.setToolTip("Open large floating screen view of the boundary overlay (or double-click the preview)")
         self.btn_ana_enlarge.setStyleSheet(
             "QPushButton { background-color: #2c313a; color: #abb2bf; border: 1px solid #3e4451; "
@@ -8593,20 +8593,20 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         banner_lay.setContentsMargins(8, 8, 8, 8)
         banner_lay.setSpacing(4)
 
-        lbl_guide_title = QtWidgets.QLabel("📋 Required Workflow Order for Perfect Alignment:")
+        lbl_guide_title = QtWidgets.QLabel(" Required Workflow Order for Perfect Alignment:")
         lbl_guide_title.setStyleSheet("font-weight: bold; color: #ffaa00; font-size: 11px;")
         banner_lay.addWidget(lbl_guide_title)
 
         lbl_guide_steps = QtWidgets.QLabel(
-            "<b>Step 1:</b> Click <b>🔍 Analyze Room Boundaries</b> (solves physical room dimensions).<br>"
-            "<b>Step 2:</b> Click <b>📐 Auto-Align Room to HDRI</b> (computes true camera offset & orientation).<br>"
-            "<b>Step 3:</b> Click <b>👉 Apply Solved Dimensions & Align Room Box</b> below to transfer to Solaris & snap practical lights!"
+            "<b>Step 1:</b> Click <b>Analyze Room Boundaries</b> (solves physical room dimensions).<br>"
+            "<b>Step 2:</b> Click <b>Auto-Align Room to HDRI</b> (computes true camera offset & orientation).<br>"
+            "<b>Step 3:</b> Click <b>Apply Solved Dimensions & Align Room Box</b> below to transfer to Solaris & snap practical lights!"
         )
         lbl_guide_steps.setStyleSheet("color: #dcdfe4; font-size: 11px; line-height: 145%;")
         banner_lay.addWidget(lbl_guide_steps)
         apply_lay.addWidget(banner_guide)
 
-        self.btn_apply_to_room_box = QtWidgets.QPushButton("👉 Apply Solved Dimensions & Align Room Box")
+        self.btn_apply_to_room_box = QtWidgets.QPushButton("Apply Solved Dimensions & Align Room Box")
         self.btn_apply_to_room_box.setEnabled(True)
         self.btn_apply_to_room_box.setToolTip(
             "Step 3: Transfers the solved Width, Depth, Height, Camera Offsets, and Tripod Height directly into "
@@ -8625,7 +8625,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         apply_lay.addWidget(self.btn_apply_to_room_box)
 
         # Quick navigation button to DomeBreaker tab
-        self.btn_goto_dome_tab = QtWidgets.QPushButton("⚡ View in DomeBreaker Tab")
+        self.btn_goto_dome_tab = QtWidgets.QPushButton("View in DomeBreaker Tab")
         self.btn_goto_dome_tab.setStyleSheet(
             "QPushButton { background: #252830; color: #ffcc44; font-weight: bold; "
             "border: 1px solid #3d4452; border-radius: 4px; padding: 5px 10px; font-size: 11px; } "
@@ -8657,7 +8657,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     img_input = path_exp
 
         if img_input is None:
-            self.lbl_ana_status.setText("⚠️ Please load an HDRI map first.")
+            self.lbl_ana_status.setText("[!] Please load an HDRI map first.")
             self.log("HDRI Room Analyzer: No valid HDRI loaded to analyze.", "WARNING")
             return
 
@@ -8695,7 +8695,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             conf = res.get("confidence", 85)
             self.lbl_ana_confidence.setText(f"Confidence: {conf}%")
             self.lbl_ana_status.setText(
-                f"✓ Detected: {res['room_width']:.2f}m(W) × {res['room_depth']:.2f}m(D) × {res['room_height']:.2f}m(H) [Yaw: {res['yaw']:.1f}°]"
+                f"[OK] Detected: {res['room_width']:.2f}m(W) × {res['room_depth']:.2f}m(D) × {res['room_height']:.2f}m(H) [Yaw: {res['yaw']:.1f}°]"
             )
 
             # Update overlay preview
@@ -8808,9 +8808,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 "HDRI Room Analysis Required!\n\n"
                 "To ensure the room box and practical lights snap to their exact physical locations, "
                 "please follow the required 3-step workflow:\n\n"
-                "  1. Click '🔍 Analyze Room Boundaries' (detects room dimensions)\n"
-                "  2. Click '📐 Auto-Align Room to HDRI' (computes camera offsets & orientation)\n"
-                "  3. Click '👉 Apply Solved Dimensions & Align Room Box'\n\n"
+                "  1. Click 'Analyze Room Boundaries' (detects room dimensions)\n"
+                "  2. Click 'Auto-Align Room to HDRI' (computes camera offsets & orientation)\n"
+                "  3. Click 'Apply Solved Dimensions & Align Room Box'\n\n"
                 "Would you like to run Step 1 and Step 2 automatically now?"
             )
             if 'hou' in sys.modules and hasattr(hou, 'isUIAvailable') and hou.isUIAvailable():
@@ -8890,7 +8890,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._sync_node()
         self._create_or_update_ground_projection(notify_ui=True)
 
-        self.lbl_ana_status.setText(f"✓ Applied to DomeBreaker: {w:.2f}m × {d:.2f}m × {h:.2f}m (Room Box active)")
+        self.lbl_ana_status.setText(f"[OK] Applied to DomeBreaker: {w:.2f}m × {d:.2f}m × {h:.2f}m (Room Box active)")
         self.log(
             f"Transferred Room Dimensions to DomeBreaker: {w:.2f}m(W) x {d:.2f}m(D) x {h:.2f}m(H), "
             f"Tripod: {tripod:.2f}m, Offsets: ({off_x:.2f}, {off_z:.2f})m, Yaw: {applied_yaw:.1f}°.",
@@ -9008,7 +9008,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 if hasattr(self, 'sld_yaw'):
                     self.sld_yaw.setValue(norm_yaw)
             if hasattr(self, 'btn_bake_ground_planar'):
-                self.btn_bake_ground_planar.setText(f"🎨 Re-bake Planar ({norm_yaw:.1f}°)")
+                self.btn_bake_ground_planar.setText(f"Re-bake Planar ({norm_yaw:.1f}°)")
             self._sync_node()
             self._create_or_update_ground_projection(notify_ui=True)
             self.log(f"Auto-aligned Room Yaw to detected room wall orientation: {norm_yaw}°", "SUCCESS")
@@ -9018,7 +9018,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
     def _on_room_yaw_changed(self, val):
         """Handle real-time room yaw slider changes, updating projection in real time."""
         if hasattr(self, 'btn_bake_ground_planar'):
-            self.btn_bake_ground_planar.setText(f"🎨 Re-bake Planar ({val:.1f}°)")
+            self.btn_bake_ground_planar.setText(f"Re-bake Planar ({val:.1f}°)")
 
         if hasattr(self, 'chk_link_room_dome_yaw') and self.chk_link_room_dome_yaw.isChecked():
             if hasattr(self, 'sld_yaw') and abs(self.sld_yaw.value() - val) > 1e-4:
@@ -9129,7 +9129,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.sld_room_yaw.setValue(new_val)
             self.sld_room_yaw.blockSignals(False)
         if hasattr(self, 'btn_bake_ground_planar'):
-            self.btn_bake_ground_planar.setText(f"🎨 Re-bake Planar ({new_val:.1f}°)")
+            self.btn_bake_ground_planar.setText(f"Re-bake Planar ({new_val:.1f}°)")
         if hasattr(self, 'chk_link_room_dome_yaw') and self.chk_link_room_dome_yaw.isChecked():
             if hasattr(self, 'sld_yaw'):
                 self.sld_yaw.setValue(new_val)
@@ -9142,7 +9142,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.sld_room_yaw.setValue(0.0)
             self.sld_room_yaw.blockSignals(False)
         if hasattr(self, 'btn_bake_ground_planar'):
-            self.btn_bake_ground_planar.setText("🎨 Bake Planar Textures")
+            self.btn_bake_ground_planar.setText("Bake Planar Textures")
         if hasattr(self, 'chk_link_room_dome_yaw') and self.chk_link_room_dome_yaw.isChecked():
             if hasattr(self, 'sld_yaw'):
                 self.sld_yaw.setValue(0.0)
@@ -10392,10 +10392,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
             if hasattr(self, 'lbl_sun_clipping_status'):
                 if clip_info["is_clipped"]:
-                    self.lbl_sun_clipping_status.setText(f"🚨 Clipped by +{clip_info['ev_stops_lost']:.1f} EV stops ({clip_info['ratio']:.1f}× under)")
+                    self.lbl_sun_clipping_status.setText(f"[!] Clipped by +{clip_info['ev_stops_lost']:.1f} EV stops ({clip_info['ratio']:.1f}× under)")
                     self.lbl_sun_clipping_status.setStyleSheet("color: #ffaa00; font-weight: bold;")
                 else:
-                    self.lbl_sun_clipping_status.setText("✅ Sun Unclipped (Physical)")
+                    self.lbl_sun_clipping_status.setText("[OK] Sun Unclipped (Physical)")
                     self.lbl_sun_clipping_status.setStyleSheet("color: #00ff88; font-weight: bold;")
 
             if hasattr(self, 'lbl_sun_physical_flux'):
@@ -12484,7 +12484,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CrossCursor)
 
         label_name = getattr(target_picker, '_label', 'Color')
-        self.log(f"🎯 Color Picker Armed: Click on Target Plate preview (or anywhere on screen) to sample {label_name}. Press [Esc] to cancel.", "INFO")
+        self.log(f"[*] Color Picker Armed: Click on Target Plate preview (or anywhere on screen) to sample {label_name}. Press [Esc] to cancel.", "INFO")
 
     def stop_color_sampling(self):
         """Disarm interactive eyedropper mode."""
@@ -12516,7 +12516,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         source_str = "Plate (Linear)" if is_plate else "Screen"
         QtWidgets.QToolTip.showText(
             global_pos,
-            f"🎯 {source_str}\nRGB: ({r:.3f}, {g:.3f}, {b:.3f})\nTint: {hex_code}",
+            f"[*] {source_str}\nRGB: ({r:.3f}, {g:.3f}, {b:.3f})\nTint: {hex_code}",
             widget or self
         )
 
@@ -12537,7 +12537,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         label_name = getattr(picker, '_label', 'Color')
         source_str = "Plate (32-bit float)" if is_plate else "Screen (linearized)"
         self.log(
-            f"🎯 Sampled {label_name} from {source_str}: Raw=({r:.3f}, {g:.3f}, {b:.3f}) → Tint=({r_norm:.3f}, {g_norm:.3f}, {b_norm:.3f})",
+            f"[*] Sampled {label_name} from {source_str}: Raw=({r:.3f}, {g:.3f}, {b:.3f}) → Tint=({r_norm:.3f}, {g_norm:.3f}, {b_norm:.3f})",
             "SUCCESS"
         )
         picker.setColor(r_norm, g_norm, b_norm)
@@ -12644,7 +12644,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             r, g, b = r / max_c, g / max_c, b / max_c
         if hasattr(self, 'col_sky'):
             self.col_sky.setColor(r, g, b)
-            self.log(f"🌅 Set Sky Color to Plate Average Sky (Top 40%): Tint=({r:.3f}, {g:.3f}, {b:.3f})", "SUCCESS")
+            self.log(f" Set Sky Color to Plate Average Sky (Top 40%): Tint=({r:.3f}, {g:.3f}, {b:.3f})", "SUCCESS")
 
     def sample_average_plate_ground(self):
         """Sample bottom 40% average linear color from plate and apply to Ground Color."""
@@ -12661,7 +12661,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             r, g, b = r / max_c, g / max_c, b / max_c
         if hasattr(self, 'col_ground'):
             self.col_ground.setColor(r, g, b)
-            self.log(f"🌄 Set Ground Color to Plate Average Ground (Bottom 40%): Tint=({r:.3f}, {g:.3f}, {b:.3f})", "SUCCESS")
+            self.log(f" Set Ground Color to Plate Average Ground (Bottom 40%): Tint=({r:.3f}, {g:.3f}, {b:.3f})", "SUCCESS")
 
     def _show_preview_context_menu(self, widget, global_pos):
         """Show context menu on plate previews for quick color sampling."""
@@ -12676,11 +12676,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "QMenu::separator { height: 1px; background-color: #333; margin: 4px 6px; }"
         )
 
-        act_sky = menu.addAction("🎯 Sample Click as Sky Color")
-        act_ground = menu.addAction("🎯 Sample Click as Ground Color")
+        act_sky = menu.addAction("[*] Sample Click as Sky Color")
+        act_ground = menu.addAction("[*] Sample Click as Ground Color")
         menu.addSeparator()
-        act_avg_sky = menu.addAction("🌅 Set Sky Color to Plate Average Sky (Top 40%)")
-        act_avg_ground = menu.addAction("🌄 Set Ground Color to Plate Average Ground (Bottom 40%)")
+        act_avg_sky = menu.addAction(" Set Sky Color to Plate Average Sky (Top 40%)")
+        act_avg_ground = menu.addAction(" Set Ground Color to Plate Average Ground (Bottom 40%)")
 
         chosen = menu.exec_(global_pos)
         if not chosen:
@@ -13089,7 +13089,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
     def _merge_light_networks(self, notify_ui=True):
         """Merge HDRI Match (dome + sun), Crucible Light Studio, and lookdev spheres
         into a single, clean, continuous flow in /stage.
-        Pipeline flow: hdri_dome ➔ hdri_sun ➔ [extracted/practicals] ➔ hdri_match_projection ➔ hdri_match_lookdev ➔ crucible_light_studio ➔ [downstream/camera]
+        Pipeline flow: hdri_dome -> hdri_sun -> [extracted/practicals] -> hdri_match_projection -> hdri_match_lookdev -> crucible_light_studio -> [downstream/camera]
         """
         self.log("Action: Merging HDRI Match and Crucible networks into single flow...", "INFO")
         try:
@@ -13185,7 +13185,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 pass
 
             active_summary_nodes = [n for n in [dome_node, sun_node, proj_node, matlib_node, lookdev_node, crucible_node] if n is not None and not n.isBypassed()]
-            flow_summary = " ➔ ".join([n.name() for n in active_summary_nodes])
+            flow_summary = " -> ".join([n.name() for n in active_summary_nodes])
             self.log(f"Single continuous stage flow merged successfully: {flow_summary}", "SUCCESS")
 
             if notify_ui and hou.isUIAvailable():
@@ -14384,10 +14384,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
             if hasattr(self, 'lbl_sun_clipping_status'):
                 if updated_clip["is_clipped"]:
-                    self.lbl_sun_clipping_status.setText(f"🚨 Clipped by +{updated_clip['ev_stops_lost']:.1f} EV stops ({updated_clip['ratio']:.1f}× under)")
+                    self.lbl_sun_clipping_status.setText(f"[!] Clipped by +{updated_clip['ev_stops_lost']:.1f} EV stops ({updated_clip['ratio']:.1f}× under)")
                     self.lbl_sun_clipping_status.setStyleSheet("color: #ffaa00; font-weight: bold;")
                 else:
-                    self.lbl_sun_clipping_status.setText("✅ Sun Unclipped (Physical)")
+                    self.lbl_sun_clipping_status.setText("[OK] Sun Unclipped (Physical)")
                     self.lbl_sun_clipping_status.setStyleSheet("color: #00ff88; font-weight: bold;")
             if hasattr(self, 'lbl_sun_physical_flux'):
                 if mode == "absolute":
