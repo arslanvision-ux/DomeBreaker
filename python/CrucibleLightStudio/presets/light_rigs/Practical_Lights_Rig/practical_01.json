@@ -1,0 +1,46 @@
+{
+  "prim_path": "/lights/practicals/practical_01",
+  "light_type": "RectLight",
+  "name": "practical_01",
+  "enabled": true,
+  "solo": false,
+  "exposure": -0.3,
+  "intensity": 1.0,
+  "color": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "temperature": 6500.0,
+  "use_temperature": false,
+  "width": 5.9045896869737176,
+  "height": 4.943831333760549,
+  "texture_path": "C:/Users/test/hdri_match/textures/abandoned_tiled_room_1k_emitter_01.exr",
+  "gobo_path": "",
+  "normalize": false,
+  "diffuse": 1.0,
+  "specular": 1.0,
+  "cone_angle": 90.0,
+  "softness": 0.0,
+  "shadow_enable": true,
+  "shadow_color": [
+    0,
+    0,
+    0
+  ],
+  "translate": [
+    -4.5731271779012586,
+    3.42,
+    5.268756059916996
+  ],
+  "rotate": [
+    -90.0,
+    0.0,
+    0.0
+  ],
+  "fx_mode": "none",
+  "links": "",
+  "sss": 1.0,
+  "volume": 2.0,
+  "radius": 0.5
+}

@@ -3,23 +3,45 @@
   <interface name="domebreaker_panel" label="DomeBreaker"
              icon="domebreaker_logo_48.png" help_url="">
     <script><![CDATA[
+def _find_crucible_dir():
+    import os
+    embedded = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "python", "CrucibleLightStudio"))
+    if os.path.isdir(embedded):
+        return embedded
+    candidates = [
+        os.environ.get("CRUCIBLE_LIGHT_STUDIO_ROOT"),
+        os.environ.get("CRUCIBLE_ROOT"),
+        r"D:\PROJECTS\CrucibleLightStudio",
+        r"D:\PROJECTS\Crucible",
+        r"C:\PROJECTS\CrucibleLightStudio",
+        r"C:\PROJECTS\Crucible",
+        os.path.expanduser("~/CrucibleLightStudio"),
+        os.path.expanduser("~/Crucible"),
+        "/opt/CrucibleLightStudio",
+        "/opt/Crucible",
+    ]
+    for cand in candidates:
+        if cand and os.path.isdir(cand):
+            return os.path.abspath(cand)
+    return None
+
 def _build_panel():
     try:
         import os, sys, hou
         
-        # Ensure Crucible Light Studio is on sys.path and HDA is installed
-        crucible_root = os.environ.get("CRUCIBLE_LIGHT_STUDIO_ROOT", r"E:\PROJECTS\CrucibleLightStudio")
-        crucible_parent = os.path.dirname(crucible_root)
-        for p in [crucible_parent, crucible_root]:
-            if os.path.exists(p) and p not in sys.path:
-                sys.path.insert(0, p)
-                
-        hda_file = os.path.join(crucible_root, "hda", "crucible_light_studio.hda")
-        if os.path.exists(hda_file):
-            try:
-                hou.hda.installFile(hda_file)
-            except Exception:
-                pass
+        # Ensure Crucible Light Studio is on sys.path and HDA is installed if present
+        c_root = _find_crucible_dir()
+        if c_root:
+            c_parent = os.path.dirname(c_root)
+            for p in [c_parent, c_root]:
+                if p and os.path.exists(p) and p not in sys.path:
+                    sys.path.insert(0, p)
+            hda_file = os.path.join(c_root, "hda", "crucible_light_studio.hda")
+            if os.path.exists(hda_file):
+                try:
+                    hou.hda.installFile(hda_file)
+                except Exception:
+                    pass
                 
         import importlib
         import hdri_match_solaris.panel_ui

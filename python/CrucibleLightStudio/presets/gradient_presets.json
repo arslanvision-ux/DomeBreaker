@@ -1,0 +1,41 @@
+{
+  "blahst": {
+    "type": 19,
+    "softness": 50,
+    "bias": 50,
+    "width": 69,
+    "count": 99
+  },
+  "fffffffffffff": {
+    "type": 20,
+    "noise_type": 2,
+    "softness": 20,
+    "bias": 72,
+    "width": 66,
+    "count": 60
+  },
+  "noises": {
+    "type": 20,
+    "noise_type": 1,
+    "softness": 50,
+    "bias": 50,
+    "width": 50,
+    "count": 50
+  },
+  "noises_caustics": {
+    "type": 20,
+    "noise_type": 3,
+    "softness": 100,
+    "bias": 100,
+    "width": 100,
+    "count": 47
+  },
+  "custom_gradient": {
+    "type": 0,
+    "noise_type": 0,
+    "softness": 50,
+    "bias": 50,
+    "width": 50,
+    "count": 50
+  }
+}

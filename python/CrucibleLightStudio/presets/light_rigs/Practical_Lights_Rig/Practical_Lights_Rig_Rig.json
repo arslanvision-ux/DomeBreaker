@@ -1,0 +1,420 @@
+{
+  "rig_name": "Practical_Lights_Rig",
+  "version": "1.0",
+  "lights": [
+    {
+      "prim_path": "/lights/practicals/practical_01",
+      "light_type": "RectLight",
+      "name": "practical_01",
+      "enabled": true,
+      "solo": false,
+      "exposure": -0.3,
+      "intensity": 1.0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 6500.0,
+      "use_temperature": false,
+      "width": 5.9045896869737176,
+      "height": 4.943831333760549,
+      "texture_path": "C:/Users/test/hdri_match/textures/abandoned_tiled_room_1k_emitter_01.exr",
+      "gobo_path": "",
+      "normalize": false,
+      "diffuse": 1.0,
+      "specular": 1.0,
+      "cone_angle": 90.0,
+      "softness": 0.0,
+      "shadow_enable": true,
+      "shadow_color": [
+        0,
+        0,
+        0
+      ],
+      "translate": [
+        -4.5731271779012586,
+        3.42,
+        5.268756059916996
+      ],
+      "rotate": [
+        -90.0,
+        0.0,
+        0.0
+      ],
+      "fx_mode": "none",
+      "links": "",
+      "sss": 1.0,
+      "volume": 2.0,
+      "radius": 0.5
+    },
+    {
+      "prim_path": "/lights/practicals/practical_02",
+      "light_type": "RectLight",
+      "name": "practical_02",
+      "enabled": true,
+      "solo": false,
+      "exposure": -0.3,
+      "intensity": 1.0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 6500.0,
+      "use_temperature": false,
+      "width": 3.1151173216037904,
+      "height": 5.579330365850247,
+      "texture_path": "C:/Users/test/hdri_match/textures/abandoned_tiled_room_1k_emitter_02.exr",
+      "gobo_path": "",
+      "normalize": false,
+      "diffuse": 1.0,
+      "specular": 1.0,
+      "cone_angle": 90.0,
+      "softness": 0.0,
+      "shadow_enable": true,
+      "shadow_color": [
+        0,
+        0,
+        0
+      ],
+      "translate": [
+        7.307693326916565,
+        3.42,
+        7.160334817074877
+      ],
+      "rotate": [
+        -90.0,
+        0.0,
+        0.0
+      ],
+      "fx_mode": "none",
+      "links": "",
+      "sss": 1.0,
+      "volume": 2.0,
+      "radius": 0.5
+    },
+    {
+      "prim_path": "/lights/practicals/practical_03",
+      "light_type": "RectLight",
+      "name": "practical_03",
+      "enabled": true,
+      "solo": false,
+      "exposure": -0.3,
+      "intensity": 1.0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 6500.0,
+      "use_temperature": false,
+      "width": 5.2796576138999525,
+      "height": 3.3,
+      "texture_path": "C:/Users/test/hdri_match/textures/abandoned_tiled_room_1k_emitter_03.exr",
+      "gobo_path": "",
+      "normalize": false,
+      "diffuse": 1.0,
+      "specular": 1.0,
+      "cone_angle": 90.0,
+      "softness": 0.0,
+      "shadow_enable": true,
+      "shadow_color": [
+        0,
+        0,
+        0
+      ],
+      "translate": [
+        3.752062778797567,
+        1.8,
+        -9.92
+      ],
+      "rotate": [
+        0.0,
+        180.0,
+        0.0
+      ],
+      "fx_mode": "none",
+      "links": "",
+      "sss": 1.0,
+      "volume": 2.0,
+      "radius": 0.5
+    },
+    {
+      "prim_path": "/lights/practicals/practical_04",
+      "light_type": "RectLight",
+      "name": "practical_04",
+      "enabled": true,
+      "solo": false,
+      "exposure": -0.3,
+      "intensity": 1.0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 6500.0,
+      "use_temperature": false,
+      "width": 12.141082724744729,
+      "height": 3.3,
+      "texture_path": "C:/Users/test/hdri_match/textures/abandoned_tiled_room_1k_emitter_04.exr",
+      "gobo_path": "",
+      "normalize": false,
+      "diffuse": 1.0,
+      "specular": 1.0,
+      "cone_angle": 90.0,
+      "softness": 0.0,
+      "shadow_enable": true,
+      "shadow_color": [
+        0,
+        0,
+        0
+      ],
+      "translate": [
+        9.92,
+        1.75,
+        1.264540573203335
+      ],
+      "rotate": [
+        0.0,
+        90.0,
+        0.0
+      ],
+      "fx_mode": "none",
+      "links": "",
+      "sss": 1.0,
+      "volume": 2.0,
+      "radius": 0.5
+    },
+    {
+      "prim_path": "/lights/practicals/practical_05",
+      "light_type": "RectLight",
+      "name": "practical_05",
+      "enabled": true,
+      "solo": false,
+      "exposure": -0.3,
+      "intensity": 1.0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 6500.0,
+      "use_temperature": false,
+      "width": 5.5458537253634645,
+      "height": 6.712194845126712,
+      "texture_path": "C:/Users/test/hdri_match/textures/abandoned_tiled_room_1k_emitter_05.exr",
+      "gobo_path": "",
+      "normalize": false,
+      "diffuse": 1.0,
+      "specular": 1.0,
+      "cone_angle": 90.0,
+      "softness": 0.0,
+      "shadow_enable": true,
+      "shadow_color": [
+        0,
+        0,
+        0
+      ],
+      "translate": [
+        -2.037625202118502,
+        0.08,
+        -6.593902577436644
+      ],
+      "rotate": [
+        90.0,
+        0.0,
+        0.0
+      ],
+      "fx_mode": "none",
+      "links": "",
+      "sss": 1.0,
+      "volume": 2.0,
+      "radius": 0.5
+    },
+    {
+      "prim_path": "/lights/practicals/practical_06",
+      "light_type": "RectLight",
+      "name": "practical_06",
+      "enabled": true,
+      "solo": false,
+      "exposure": -0.3,
+      "intensity": 1.0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 6500.0,
+      "use_temperature": false,
+      "width": 6.928168957331188,
+      "height": 7.5876449567595765,
+      "texture_path": "C:/Users/test/hdri_match/textures/abandoned_tiled_room_1k_emitter_06.exr",
+      "gobo_path": "",
+      "normalize": false,
+      "diffuse": 1.0,
+      "specular": 1.0,
+      "cone_angle": 90.0,
+      "softness": 0.0,
+      "shadow_enable": true,
+      "shadow_color": [
+        0,
+        0,
+        0
+      ],
+      "translate": [
+        -4.887605069850022,
+        3.42,
+        4.97841333010303
+      ],
+      "rotate": [
+        -90.0,
+        0.0,
+        0.0
+      ],
+      "fx_mode": "none",
+      "links": "",
+      "sss": 1.0,
+      "volume": 2.0,
+      "radius": 0.5
+    },
+    {
+      "prim_path": "/lights/practicals/practical_07",
+      "light_type": "RectLight",
+      "name": "practical_07",
+      "enabled": true,
+      "solo": false,
+      "exposure": -0.3,
+      "intensity": 1.0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 6500.0,
+      "use_temperature": false,
+      "width": 5.9634500470462,
+      "height": 3.3,
+      "texture_path": "C:/Users/test/hdri_match/textures/abandoned_tiled_room_1k_emitter_07.exr",
+      "gobo_path": "",
+      "normalize": false,
+      "diffuse": 1.0,
+      "specular": 1.0,
+      "cone_angle": 90.0,
+      "softness": 0.0,
+      "shadow_enable": true,
+      "shadow_color": [
+        0,
+        0,
+        0
+      ],
+      "translate": [
+        -9.92,
+        1.8,
+        -1.8301288926943342
+      ],
+      "rotate": [
+        0.0,
+        -90.0,
+        0.0
+      ],
+      "fx_mode": "none",
+      "links": "",
+      "sss": 1.0,
+      "volume": 2.0,
+      "radius": 0.5
+    },
+    {
+      "prim_path": "/lights/practicals/practical_08",
+      "light_type": "RectLight",
+      "name": "practical_08",
+      "enabled": true,
+      "solo": false,
+      "exposure": -0.3,
+      "intensity": 1.0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 6500.0,
+      "use_temperature": false,
+      "width": 12.588247795070332,
+      "height": 3.3,
+      "texture_path": "C:/Users/test/hdri_match/textures/abandoned_tiled_room_1k_emitter_08.exr",
+      "gobo_path": "",
+      "normalize": false,
+      "diffuse": 1.0,
+      "specular": 1.0,
+      "cone_angle": 90.0,
+      "softness": 0.0,
+      "shadow_enable": true,
+      "shadow_color": [
+        0,
+        0,
+        0
+      ],
+      "translate": [
+        -3.655876102464834,
+        1.75,
+        -9.92
+      ],
+      "rotate": [
+        0.0,
+        180.0,
+        0.0
+      ],
+      "fx_mode": "none",
+      "links": "",
+      "sss": 1.0,
+      "volume": 2.0,
+      "radius": 0.5
+    },
+    {
+      "prim_path": "/lights/practicals/practical_09",
+      "light_type": "RectLight",
+      "name": "practical_09",
+      "enabled": true,
+      "solo": false,
+      "exposure": -0.3,
+      "intensity": 1.0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 6500.0,
+      "use_temperature": false,
+      "width": 5.9045896869737176,
+      "height": 4.943831333760549,
+      "texture_path": "C:/Users/test/hdri_match/textures/abandoned_tiled_room_1k_emitter_01.exr",
+      "gobo_path": "",
+      "normalize": false,
+      "diffuse": 1.0,
+      "specular": 1.0,
+      "cone_angle": 90.0,
+      "softness": 0.0,
+      "shadow_enable": true,
+      "shadow_color": [
+        0,
+        0,
+        0
+      ],
+      "translate": [
+        -4.0731271779012586,
+        3.42,
+        5.268756059916996
+      ],
+      "rotate": [
+        -90.0,
+        0.0,
+        0.0
+      ],
+      "fx_mode": "none",
+      "links": "",
+      "sss": 1.0,
+      "volume": 2.0,
+      "radius": 0.5
+    }
+  ]
+}

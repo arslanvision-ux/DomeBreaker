@@ -19,15 +19,6 @@ Open the DomeBreaker UI Panel in a single clean floating window or bring existin
 import sys
 import hou
 
-# Ensure module is reloaded if needed
-for mod in ["hdri_match_solaris.panel_ui", "hdri_match_solaris", "domebreaker"]:
-    if mod in sys.modules:
-        import importlib
-        try:
-            importlib.reload(sys.modules[mod])
-        except Exception:
-            pass
-
 target_interfaces = ["domebreaker_panel", "hdri_match_panel"]
 interface_name = None
 for iface in target_interfaces:
@@ -37,7 +28,7 @@ for iface in target_interfaces:
 
 if not interface_name:
     hou.ui.displayMessage(
-        "DomeBreaker panel interface not found.\nPlease restart Houdini to register the new package.", 
+        "DomeBreaker panel interface not found.\nPlease restart Houdini or check your domebreaker.json package configuration.", 
         severity=hou.severityType.Error
     )
 else:
@@ -77,8 +68,19 @@ else:
         except Exception:
             pass
     else:
-        panel_pane = desk.createFloatingPaneTab(hou.paneTabType.PythonPanel, position=(400, 200), size=(420, 800))
-        panel_pane.setActiveInterface(interface)
+        created = False
+        try:
+            fp = desk.createFloatingPanel(hou.paneTabType.PythonPanel, position=(400, 200), size=(520, 850))
+            if fp and fp.panes():
+                tab = fp.panes()[0].currentTab()
+                if tab:
+                    tab.setActiveInterface(interface)
+                    created = True
+        except Exception:
+            pass
+        if not created:
+            panel_pane = desk.createFloatingPaneTab(hou.paneTabType.PythonPanel, position=(400, 200), size=(520, 850))
+            panel_pane.setActiveInterface(interface)
 ]]></script>
   </tool>
 

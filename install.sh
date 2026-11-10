@@ -89,6 +89,9 @@ for hpref in "$HOME"/houdini* "$HOME"/.houdini*; do
             "HDRI_MATCH_SOLARIS_ROOT": "\$DOMEBREAKER_ROOT"
         },
         {
+            "CRUCIBLE_LIGHT_STUDIO_ROOT": "\$DOMEBREAKER_ROOT/python/CrucibleLightStudio"
+        },
+        {
             "PYTHONPATH": {
                 "value": [
                     "\$DOMEBREAKER_ROOT/python"

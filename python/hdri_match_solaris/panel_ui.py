@@ -89,23 +89,65 @@ def _get_create_or_update_material_library():
         return None
 
 # --- Crucible Light Studio & Drop Target Setup ---
-CRUCIBLE_ROOT = os.environ.get("CRUCIBLE_LIGHT_STUDIO_ROOT", r"E:\PROJECTS\CrucibleLightStudio")
-CRUCIBLE_PARENT = os.path.dirname(CRUCIBLE_ROOT)
-for _p in [CRUCIBLE_PARENT, CRUCIBLE_ROOT]:
-    if os.path.exists(_p) and _p not in sys.path:
-        sys.path.insert(0, _p)
+def _find_crucible_root():
+    """Find the root path of Crucible Light Studio across Windows and Linux."""
+    # 1. Directly check embedded package inside DomeBreaker
+    embedded = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "CrucibleLightStudio"))
+    if os.path.isdir(embedded) and (
+        os.path.isfile(os.path.join(embedded, "ui", "main_panel.py"))
+        or os.path.isfile(os.path.join(embedded, "__init__.py"))
+    ):
+        return embedded
+
+    candidates = [
+        os.environ.get("CRUCIBLE_LIGHT_STUDIO_ROOT"),
+        os.environ.get("CRUCIBLE_ROOT"),
+        # Relative to DomeBreaker
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "CrucibleLightStudio")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "Crucible")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Crucible")),
+        # Common Windows paths
+        r"D:\PROJECTS\CrucibleLightStudio",
+        r"D:\PROJECTS\Crucible",
+        r"C:\PROJECTS\CrucibleLightStudio",
+        r"C:\PROJECTS\Crucible",
+        # Common Linux / studio paths
+        os.path.expanduser("~/CrucibleLightStudio"),
+        os.path.expanduser("~/Crucible"),
+        "/opt/CrucibleLightStudio",
+        "/opt/Crucible",
+    ]
+    for cand in candidates:
+        if cand and os.path.isdir(cand):
+            if (
+                os.path.isfile(os.path.join(cand, "ui", "main_panel.py"))
+                or os.path.isfile(os.path.join(cand, "CrucibleLightStudio", "ui", "main_panel.py"))
+                or os.path.isdir(os.path.join(cand, "crucible"))
+            ):
+                return os.path.abspath(cand)
+    return None
+
+CRUCIBLE_ROOT = _find_crucible_root()
+CRUCIBLE_PARENT = os.path.dirname(CRUCIBLE_ROOT) if CRUCIBLE_ROOT else None
 
 def _ensure_crucible_environment():
-    """Ensure Crucible root is in sys.path and HDA is installed."""
-    for _p in [CRUCIBLE_PARENT, CRUCIBLE_ROOT]:
-        if os.path.exists(_p) and _p not in sys.path:
+    """Ensure Crucible root and its parent are in sys.path and HDA is installed."""
+    c_root = _find_crucible_root()
+    if not c_root:
+        return None
+    c_parent = os.path.dirname(c_root)
+    for _p in [c_parent, c_root]:
+        if _p and os.path.exists(_p) and _p not in sys.path:
             sys.path.insert(0, _p)
     try:
-        hda_file = os.path.join(CRUCIBLE_ROOT, "hda", "crucible_light_studio.hda")
+        hda_file = os.path.join(c_root, "hda", "crucible_light_studio.hda")
         if os.path.exists(hda_file) and hou:
             hou.hda.installFile(hda_file)
     except Exception:
         pass
+    return c_root
+
+_ensure_crucible_environment()
 
 try:
     from hdri_match_solaris.drop_target import HDRIDropTarget
@@ -8171,7 +8213,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         c_layout.setSpacing(4)
 
         # Pop Out button directly on Crucible Header
-        self.btn_popout_crucible = QtWidgets.QPushButton("⧉ Pop Out")
+        self.btn_popout_crucible = QtWidgets.QPushButton("⧉ Pop Out", self._crucible_container)
         self.btn_popout_crucible.setToolTip("Open HDRI Library in a floating window")
         self.btn_popout_crucible.setStyleSheet(
             "QPushButton { background-color: #2a2a2a; color: #bbb; border: 1px solid #444; "
@@ -8181,30 +8223,48 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_popout_crucible.clicked.connect(self._popout_crucible_window)
 
         # Hidden stubs for compatibility
-        self.btn_crucible_merge = QtWidgets.QPushButton("🔀 Merge Flow")
+        self.btn_crucible_merge = QtWidgets.QPushButton("🔀 Merge Flow", self._crucible_container)
         self.btn_crucible_merge.hide()
-        self.btn_close_crucible = QtWidgets.QPushButton("✕")
+        self.btn_close_crucible = QtWidgets.QPushButton("✕", self._crucible_container)
         self.btn_close_crucible.hide()
 
         # Embedded Crucible Panel (Single unified header)
         self._crucible_panel = None
         self._floating_crucible_win = None
+        crucible_loaded = False
         try:
-            _ensure_crucible_environment()
-            from CrucibleLightStudio.ui.main_panel import CrucibleLightStudioPanel
-            self._crucible_panel = CrucibleLightStudioPanel()
-            if hasattr(self._crucible_panel, "add_header_widget"):
-                self._crucible_panel.add_header_widget(self.btn_popout_crucible)
-            elif hasattr(self._crucible_panel, "_header_layout") and self._crucible_panel._header_layout:
-                self._crucible_panel._header_layout.addWidget(self.btn_popout_crucible)
-            c_layout.addWidget(self._crucible_panel, 1)
-            self.log("HDRI Library integrated successfully into side panel.", "SUCCESS")
+            c_root = _ensure_crucible_environment()
+            if c_root:
+                from CrucibleLightStudio.ui.main_panel import CrucibleLightStudioPanel
+                self._crucible_panel = CrucibleLightStudioPanel()
+                if hasattr(self._crucible_panel, "add_header_widget"):
+                    self._crucible_panel.add_header_widget(self.btn_popout_crucible)
+                elif hasattr(self._crucible_panel, "_header_layout") and self._crucible_panel._header_layout:
+                    self._crucible_panel._header_layout.addWidget(self.btn_popout_crucible)
+                c_layout.addWidget(self._crucible_panel, 1)
+                self.log("HDRI Library integrated successfully into side panel.", "SUCCESS")
+                crucible_loaded = True
         except Exception as e:
-            err_msg = QtWidgets.QLabel(f"Failed to load Crucible Light Studio:\n{e}")
-            err_msg.setStyleSheet("color: #ff6666; background: #2a1111; padding: 8px; border-radius: 4px;")
-            err_msg.setWordWrap(True)
-            c_layout.addWidget(err_msg, 1)
-            self.log(f"Crucible Light Studio load error: {e}", "ERROR")
+            self.log(f"Crucible Light Studio optional load notice: {e}", "DEBUG")
+
+        if not crucible_loaded:
+            self.btn_popout_crucible.hide()
+            self.lbl_crucible_placeholder = QtWidgets.QLabel(
+                "<b>HDRI Library (Crucible Light Studio)</b><br><br>"
+                "The optional Crucible Light Studio module is not installed or linked.<br><br>"
+                "To enable the integrated HDRI Library:<br>"
+                "1. Copy or clone Crucible to your workstation.<br>"
+                "2. Set the environment variable:<br>"
+                "&nbsp;&nbsp;<code>CRUCIBLE_LIGHT_STUDIO_ROOT=/path/to/Crucible</code><br>"
+                "or place the <code>Crucible</code> folder alongside <code>DomeBreaker</code>.",
+                self._crucible_container
+            )
+            self.lbl_crucible_placeholder.setStyleSheet(
+                "color: #abb2bf; background: #1c1e24; border: 1px solid #2d313a; border-radius: 6px; padding: 12px; font-size: 11px;"
+            )
+            self.lbl_crucible_placeholder.setWordWrap(True)
+            c_layout.addWidget(self.lbl_crucible_placeholder, 1)
+            self.log("Crucible Light Studio not detected (running in standalone mode).", "INFO")
 
         # Initially hidden by default
         self._crucible_container.hide()
