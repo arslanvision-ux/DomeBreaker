@@ -1812,10 +1812,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             except Exception:
                 pass
 
-        restored = self._restore_state_from_scene(notify=False)
+        restored = self._restore_state_from_scene(notify=False, allow_prefs=False)
         self._initializing = False
-        if not restored:
-            self._sync_node()
         self.log("DomeBreaker panel initialized. Ready.", "SUCCESS")
 
     def closeEvent(self, event):
@@ -9389,15 +9387,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         if getattr(self, '_restoring_state', False) or getattr(self, '_initializing', False):
             return
         try:
-            stage_node = self._get_stage_node()
+            stage_node = self._get_stage_node(create=False)
+            if not stage_node:
+                return
             dome_node, sun_node = self._get_stage_lights()
+            if not dome_node and not sun_node:
+                return
             p = self._collect_parms()
-
-            # Ensure native Dome Light exists
-            if dome_node is None and stage_node and p.get("hdri_path"):
-                dome_node = stage_node.createNode("domelight", "hdri_dome")
-                self.log("Created native Solaris /stage/hdri_dome (domelight)", "DETAIL")
-                self._merge_light_networks(notify_ui=False)
 
             # 1. Update native Dome Light
             if dome_node is not None:
@@ -11040,7 +11036,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         """Restore UI state directly from a dictionary."""
         return self._restore_state_from_scene(notify=False, state_dict=state)
 
-    def _restore_state_from_scene(self, notify=False, state_dict=None):
+    def _restore_state_from_scene(self, notify=False, state_dict=None, allow_prefs=True):
         """
         Restore complete UI session state and reload HDRI/plate maps from:
         1. /stage/hdri_dome userData ("hdri_match_state")
@@ -11072,7 +11068,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                         pass
 
             # 2. Try stage node userData
-            stage_node = self._get_stage_node()
+            stage_node = self._get_stage_node(create=False)
             if stage_node is not None:
                 raw_data = stage_node.userData("domebreaker_state")
                 if raw_data:
@@ -11104,13 +11100,14 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     pass
 
             # 5. Try user preference JSON file on disk
-            try:
-                state_file = _get_state_filepath()
-                if os.path.isfile(state_file):
-                    with open(state_file, "r", encoding="utf-8") as f:
-                        candidate_sources.append(("Saved preferences", json.load(f)))
-            except Exception:
-                pass
+            if allow_prefs:
+                try:
+                    state_file = _get_state_filepath()
+                    if os.path.isfile(state_file):
+                        with open(state_file, "r", encoding="utf-8") as f:
+                            candidate_sources.append(("Saved preferences", json.load(f)))
+                except Exception:
+                    pass
 
             if not state:
                 # Select best candidate: prioritize the first source that has a valid hdri_path
@@ -12437,8 +12434,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         if u8_arr is None:
             return None
         h, w = u8_arr.shape[:2]
+        if h <= 0 or w <= 0:
+            return None
         u8_contig = np.ascontiguousarray(u8_arr)
-        qimg = QtGui.QImage(u8_contig.data, w, h, w * 3, QtGui.QImage.Format_RGB888)
+        qimg = QtGui.QImage(u8_contig.data, w, h, w * 3, QtGui.QImage.Format_RGB888).copy()
         return QtGui.QPixmap.fromImage(qimg)
 
     def _open_large_preview(self, mode=None):
@@ -12750,23 +12749,35 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self._draw_sun_reticle(pix_h)
 
         # 1. Update Side-by-Side previews
-        if pix_h:
+        if pix_h and not pix_h.isNull():
+            sz = self.lbl_hdri_preview.size()
+            w = max(16, sz.width()) if sz.width() > 0 else 300
+            h = max(16, sz.height()) if sz.height() > 0 else 150
             self.lbl_hdri_preview.setPixmap(pix_h.scaled(
-                self.lbl_hdri_preview.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+                w, h, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
             ))
+            sz_s = self.lbl_single_hdri.size()
+            w_s = max(16, sz_s.width()) if sz_s.width() > 0 else 300
+            h_s = max(16, sz_s.height()) if sz_s.height() > 0 else 150
             self.lbl_single_hdri.setPixmap(pix_h.scaled(
-                self.lbl_single_hdri.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+                w_s, h_s, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
             ))
         elif not self.txt_hdri.text():
             self.lbl_hdri_preview.setText("No HDRI loaded")
             self.lbl_single_hdri.setText("No HDRI loaded")
 
-        if pix_p:
+        if pix_p and not pix_p.isNull():
+            sz_p = self.lbl_plate_preview.size()
+            w_p = max(16, sz_p.width()) if sz_p.width() > 0 else 300
+            h_p = max(16, sz_p.height()) if sz_p.height() > 0 else 150
             self.lbl_plate_preview.setPixmap(pix_p.scaled(
-                self.lbl_plate_preview.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+                w_p, h_p, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
             ))
+            sz_sp = self.lbl_single_plate.size()
+            w_sp = max(16, sz_sp.width()) if sz_sp.width() > 0 else 300
+            h_sp = max(16, sz_sp.height()) if sz_sp.height() > 0 else 150
             self.lbl_single_plate.setPixmap(pix_p.scaled(
-                self.lbl_single_plate.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+                w_sp, h_sp, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
             ))
         elif not self.txt_plate.text():
             self.lbl_plate_preview.setText("No Plate loaded")
@@ -12806,10 +12817,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _get_stage_node(self):
-        """Return the /stage LOP network, creating it if needed."""
+    def _get_stage_node(self, create=False):
+        """Return the /stage LOP network, creating it only if explicitly requested."""
         stage = hou.node("/stage")
-        if stage is None:
+        if stage is None and create:
             stage = hou.node("/obj").createNode("lopnet", "stage")
         return stage
 
@@ -12948,7 +12959,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             return
 
         try:
-            stage_node = self._get_stage_node()
+            stage_node = self._get_stage_node(create=True)
             self.log(f"Target stage context: {stage_node.path()}", "DETAIL")
 
             for n in stage_node.children():

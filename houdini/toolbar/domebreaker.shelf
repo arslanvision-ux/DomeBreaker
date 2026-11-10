@@ -68,18 +68,8 @@ else:
         except Exception:
             pass
     else:
-        created = False
-        try:
-            fp = desk.createFloatingPanel(hou.paneTabType.PythonPanel, position=(400, 200), size=(520, 850))
-            if fp and fp.panes():
-                tab = fp.panes()[0].currentTab()
-                if tab:
-                    tab.setActiveInterface(interface)
-                    created = True
-        except Exception:
-            pass
-        if not created:
-            panel_pane = desk.createFloatingPaneTab(hou.paneTabType.PythonPanel, position=(400, 200), size=(520, 850))
+        panel_pane = desk.createFloatingPaneTab(hou.paneTabType.PythonPanel, position=(400, 200), size=(520, 850))
+        if panel_pane and panel_pane.activeInterface() != interface:
             panel_pane.setActiveInterface(interface)
 ]]></script>
   </tool>
@@ -140,7 +130,8 @@ else:
             pass
     else:
         panel_pane = desk.createFloatingPaneTab(hou.paneTabType.PythonPanel, position=(420, 220), size=(440, 820))
-        panel_pane.setActiveInterface(interface)
+        if panel_pane and panel_pane.activeInterface() != interface:
+            panel_pane.setActiveInterface(interface)
 ]]></script>
   </tool>
 
