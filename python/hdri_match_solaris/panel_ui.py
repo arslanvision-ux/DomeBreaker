@@ -88,10 +88,13 @@ def _get_create_or_update_material_library():
         print(f"[HDRI Match Solaris] Warning: Could not load create_or_update_material_library: {e}")
         return None
 
-# --- Crucible Light Studio & Drop Target Setup ---
+# --- Crucible Light Studio Kill-Switch (Disabled by default) ---
+ENABLE_CRUCIBLE = os.environ.get("DOMEBREAKER_ENABLE_CRUCIBLE", "0") in ("1", "true", "True")
+
 def _find_crucible_root():
-    """Find the root path of Crucible Light Studio across Windows and Linux."""
-    # 1. Directly check embedded package inside DomeBreaker
+    """Find the root path of Crucible Light Studio (disabled by default)."""
+    if not ENABLE_CRUCIBLE:
+        return None
     embedded = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "CrucibleLightStudio"))
     if os.path.isdir(embedded) and (
         os.path.isfile(os.path.join(embedded, "ui", "main_panel.py"))
@@ -102,16 +105,13 @@ def _find_crucible_root():
     candidates = [
         os.environ.get("CRUCIBLE_LIGHT_STUDIO_ROOT"),
         os.environ.get("CRUCIBLE_ROOT"),
-        # Relative to DomeBreaker
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "CrucibleLightStudio")),
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "Crucible")),
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Crucible")),
-        # Common Windows paths
         r"D:\PROJECTS\CrucibleLightStudio",
         r"D:\PROJECTS\Crucible",
         r"C:\PROJECTS\CrucibleLightStudio",
         r"C:\PROJECTS\Crucible",
-        # Common Linux / studio paths
         os.path.expanduser("~/CrucibleLightStudio"),
         os.path.expanduser("~/Crucible"),
         "/opt/CrucibleLightStudio",
@@ -132,6 +132,8 @@ CRUCIBLE_PARENT = os.path.dirname(CRUCIBLE_ROOT) if CRUCIBLE_ROOT else None
 
 def _ensure_crucible_environment():
     """Ensure Crucible root and its parent are in sys.path and HDA is installed."""
+    if not ENABLE_CRUCIBLE:
+        return None
     c_root = _find_crucible_root()
     if not c_root:
         return None
@@ -146,8 +148,6 @@ def _ensure_crucible_environment():
     except Exception:
         pass
     return c_root
-
-_ensure_crucible_environment()
 
 try:
     from hdri_match_solaris.drop_target import HDRIDropTarget
@@ -2035,6 +2035,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "QPushButton:checked { background-color: #e67e22; color: #ffffff; border-color: #ffa500; }"
         )
         self.btn_toggle_crucible.clicked.connect(self._toggle_crucible_panel)
+        if not ENABLE_CRUCIBLE:
+            self.btn_toggle_crucible.hide()
 
         self.btn_expand_all = QtWidgets.QPushButton("▼ Expand All")
         self.btn_expand_all.setToolTip("Expand all sections")
@@ -8238,6 +8240,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _ensure_crucible_panel_loaded(self):
         """Lazy load Crucible Light Studio panel on demand when user opens the drawer."""
+        if not ENABLE_CRUCIBLE:
+            return False
         if self._crucible_initialized:
             return self._crucible_panel is not None
 
