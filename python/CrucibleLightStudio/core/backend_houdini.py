@@ -288,15 +288,17 @@ class HoudiniBackend(DCCBackend):
                     os.path.join(module_dir, "hda", "crucible_light_studio.hda"),
                     os.path.join(module_dir, "..", "..", "houdini", "otls", "crucible_light_studio.hda"),
                 ]
+                loaded_hdafiles = {f.replace("\\", "/") for f in hou.hda.loadedFiles()}
                 for hda_file in hda_candidates:
                     if os.path.exists(hda_file):
-                        try:
-                            hou.hda.installFile(hda_file)
-                            break
-                        except Exception:
-                            pass
+                        if hda_file.replace("\\", "/") not in loaded_hdafiles:
+                            try:
+                                hou.hda.installFile(hda_file)
+                            except Exception:
+                                pass
+                        break
                 if not stage:
-                    stage = hou.node("/obj").createNode("lopnet", "stage")
+                    stage = hou.node("/obj/stage") or hou.node("/obj").createNode("lopnet", "stage")
                 node = stage.createNode("crucible_light_studio", "crucible_light_studio")
                 _splice_into_stage_stream(node, stage)
                 node.moveToGoodPosition()

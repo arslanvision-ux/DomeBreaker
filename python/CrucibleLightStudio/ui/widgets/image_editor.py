@@ -200,7 +200,10 @@ class ImageEditorDialog(QtWidgets.QDialog):
                     cmd.extend(["--fixnan", "black"])
                     
                 cmd.extend(["-o", new_path])
-                ret = subprocess.run(cmd, creationflags=subprocess.CREATE_NO_WINDOW, check=False).returncode
+                run_kwargs = {"check": False, "timeout": 15}
+                if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                ret = subprocess.run(cmd, **run_kwargs).returncode
                 if ret == 0:
                     self.new_path = new_path
                     self.accept()

@@ -13,6 +13,8 @@ except ImportError:
     from PySide6 import QtWidgets, QtCore, QtGui
 
 import os
+import shutil
+import subprocess
 import logging
 
 from CrucibleLightStudio.core import preset_manager
@@ -29,36 +31,53 @@ class ThumbnailWorker(QtCore.QThread):
         self.is_cancelled = False
         
     def run(self):
-        kwargs = {}
+        kwargs = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "timeout": 4,
+        }
         if os.name == 'nt' and hasattr(subprocess, 'CREATE_NO_WINDOW'):
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
+        hoiiotool_bin = None
+        if "HFS" in os.environ:
+            cand = os.path.join(os.environ["HFS"], "bin", "hoiiotool.exe" if os.name == "nt" else "hoiiotool")
+            if os.path.isfile(cand):
+                hoiiotool_bin = cand
+        if not hoiiotool_bin:
+            hoiiotool_bin = shutil.which("hoiiotool")
+        iconvert_bin = shutil.which("iconvert")
+
         for i, asset in self.assets:
-            if self.is_cancelled: break
-            if asset.get("is_folder", False): continue
+            if self.is_cancelled:
+                break
+            if asset.get("is_folder", False):
+                continue
             filepath = asset.get("path")
-            if not filepath or not os.path.isfile(filepath): continue
+            if not filepath or not os.path.isfile(filepath):
+                continue
             
             ext = os.path.splitext(filepath)[1].lower()
             if ext in {".exr", ".hdr", ".hdri", ".tx"}:
                 proxy_path = filepath + ".thumb.jpg"
                 if not os.path.exists(proxy_path):
                     try:
-                        import subprocess
-                        ret = subprocess.run(
-                            ["hoiiotool", filepath, "--resize", "512x512", "-o", proxy_path],
-                            check=False,
-                            **kwargs
-                        ).returncode
-                        if ret != 0:
+                        ret = -1
+                        if hoiiotool_bin:
+                            ret = subprocess.run(
+                                [hoiiotool_bin, filepath, "--resize", "256x256", "-o", proxy_path],
+                                check=False,
+                                **kwargs
+                            ).returncode
+                        if ret != 0 and iconvert_bin:
                             subprocess.run(
-                                ["iconvert", filepath, proxy_path],
+                                [iconvert_bin, filepath, proxy_path],
                                 check=False,
                                 **kwargs
                             )
                     except Exception:
                         pass
-                if os.path.exists(proxy_path):
+                if not self.is_cancelled and os.path.exists(proxy_path):
                     try:
                         self.thumbnail_ready.emit(i, proxy_path)
                     except Exception:
@@ -134,14 +153,22 @@ class AssetGridWidget(QtWidgets.QListWidget):
                 drag.setHotSpot(QtCore.QPoint(40, 27))
         drag.exec_(QtCore.Qt.CopyAction)
 
+    def stop_worker(self):
+        if hasattr(self, '_worker') and self._worker is not None:
+            try:
+                self._worker.is_cancelled = True
+                if self._worker.isRunning():
+                    self._worker.quit()
+                    self._worker.wait(200)
+            except Exception:
+                pass
+            self._worker = None
+
     def load_assets(self, asset_list):
         """Populate grid from a list of asset dicts asynchronously."""
+        self.stop_worker()
         self.clear()
         self._assets = asset_list
-        
-        if hasattr(self, '_worker') and self._worker.isRunning():
-            self._worker.is_cancelled = True
-            self._worker.wait()
 
         worker_queue = []
         for i, asset in enumerate(asset_list):
@@ -166,7 +193,7 @@ class AssetGridWidget(QtWidgets.QListWidget):
             self.addItem(item)
             
         if worker_queue:
-            self._worker = ThumbnailWorker(worker_queue, self)
+            self._worker = ThumbnailWorker(worker_queue, parent=None)
             self._worker.thumbnail_ready.connect(self._on_thumbnail_ready)
             self._worker.start()
 
@@ -175,11 +202,12 @@ class AssetGridWidget(QtWidgets.QListWidget):
         if item:
             pixmap = QtGui.QPixmap(filepath)
             if not pixmap.isNull():
-                item.setIcon(QtGui.QIcon(pixmap))
+                scaled = pixmap.scaled(96, 64, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+                item.setIcon(QtGui.QIcon(scaled))
 
     def _folder_icon(self):
-        """Generate a sleek folder icon for folder items."""
-        pixmap = QtGui.QPixmap(256, 256)
+        """Generate a lightweight folder icon for folder items."""
+        pixmap = QtGui.QPixmap(64, 64)
         pixmap.fill(QtCore.Qt.transparent)
         painter = QtGui.QPainter(pixmap)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
@@ -190,22 +218,22 @@ class AssetGridWidget(QtWidgets.QListWidget):
         # Tab
         painter.setPen(QtCore.Qt.NoPen)
         painter.setBrush(tab_color)
-        painter.drawRoundedRect(20, 40, 90, 40, 8, 8)
+        painter.drawRoundedRect(5, 10, 22, 10, 2, 2)
 
         # Body
         painter.setBrush(folder_color)
-        painter.drawRoundedRect(20, 65, 216, 155, 12, 12)
+        painter.drawRoundedRect(5, 16, 54, 39, 3, 3)
 
         # Front Flap Highlight
         painter.setBrush(QtGui.QColor(243, 156, 18))
-        painter.drawRoundedRect(20, 100, 216, 120, 12, 12)
+        painter.drawRoundedRect(5, 25, 54, 30, 3, 3)
 
         painter.end()
         return QtGui.QIcon(pixmap)
 
     def _placeholder_icon(self, ext):
-        """Generate a coloured placeholder icon based on file type."""
-        pixmap = QtGui.QPixmap(512, 512)
+        """Generate a lightweight coloured placeholder icon based on file type."""
+        pixmap = QtGui.QPixmap(96, 64)
 
         color_map = {
             ".exr": QtGui.QColor(60, 80, 100),
@@ -255,7 +283,7 @@ class AssetGridWidget(QtWidgets.QListWidget):
         if not data or not data.get("path"): return
         if data.get("is_folder", False):
             menu = QtWidgets.QMenu(self)
-            action_open = menu.addAction("📁 Open Folder")
+            action_open = menu.addAction("Open Folder")
             action_open.triggered.connect(lambda: self.folder_entered.emit(data["path"]))
             menu.exec_(self.mapToGlobal(pos))
             return
@@ -263,24 +291,22 @@ class AssetGridWidget(QtWidgets.QListWidget):
 
         menu = QtWidgets.QMenu(self)
         ext = data.get("ext", "").lower()
+        action_match = None
+        action_assign = None
         if ext in [".exr", ".hdr", ".hdri"]:
-            action_match = menu.addAction("🎯 Send to HDRI Match (Source HDRI)")
-            action_match.triggered.connect(lambda: self.send_to_match_requested.emit(data))
-
-            action_assign = menu.addAction("💡 Assign to Selected Crucible Light")
-            action_assign.triggered.connect(lambda: self.assign_to_crucible_light_requested.emit(data))
+            action_match = menu.addAction("Send to HDRI Match (Source HDRI)")
+            action_assign = menu.addAction("Assign to Selected Crucible Light")
             menu.addSeparator()
         elif ext in [".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".tx"]:
-            action_assign = menu.addAction("💡 Assign to Selected Crucible Light")
-            action_assign.triggered.connect(lambda: self.assign_to_crucible_light_requested.emit(data))
+            action_assign = menu.addAction("Assign to Selected Crucible Light")
             menu.addSeparator()
         action_rename = menu.addAction("Rename")
         action_delete = menu.addAction("Delete")
 
         action = menu.exec_(self.mapToGlobal(pos))
-        if action == action_match:
+        if action_match and action == action_match:
             self.send_to_match_requested.emit(data)
-        elif action == action_assign:
+        elif action_assign and action == action_assign:
             self.assign_to_crucible_light_requested.emit(data)
         elif action == action_rename:
             new_name, ok = QtWidgets.QInputDialog.getText(
@@ -674,7 +700,7 @@ class AssetLibraryWidget(QtWidgets.QWidget):
         self.zoom_slider.valueChanged.connect(self._on_zoom_changed)
         
         header.addStretch()
-        header.addWidget(QtWidgets.QLabel("🔍"))
+        header.addWidget(QtWidgets.QLabel("Zoom:"))
         header.addWidget(self.zoom_slider)
         # add a little spacing before the paths button
         header.addSpacing(10)
@@ -725,7 +751,7 @@ class AssetLibraryWidget(QtWidgets.QWidget):
             }
         """
 
-        self.btn_toggle_tree = QtWidgets.QPushButton("📁 Folders")
+        self.btn_toggle_tree = QtWidgets.QPushButton("Folders")
         self.btn_toggle_tree.setCheckable(True)
         self.btn_toggle_tree.setChecked(True)
         self.btn_toggle_tree.setFixedHeight(26)
@@ -734,14 +760,14 @@ class AssetLibraryWidget(QtWidgets.QWidget):
         self.btn_toggle_tree.toggled.connect(self._toggle_hdri_tree)
         self.hdri_nav_bar.addWidget(self.btn_toggle_tree)
 
-        self.btn_hdri_root = QtWidgets.QPushButton("🏠 All")
+        self.btn_hdri_root = QtWidgets.QPushButton("All")
         self.btn_hdri_root.setFixedHeight(26)
         self.btn_hdri_root.setStyleSheet(nav_btn_style)
         self.btn_hdri_root.setToolTip("Return to root HDRI directory")
         self.btn_hdri_root.clicked.connect(self._on_hdri_root_clicked)
         self.hdri_nav_bar.addWidget(self.btn_hdri_root)
 
-        self.btn_hdri_up = QtWidgets.QPushButton("⬆ Up")
+        self.btn_hdri_up = QtWidgets.QPushButton("Up")
         self.btn_hdri_up.setFixedHeight(26)
         self.btn_hdri_up.setStyleSheet(nav_btn_style)
         self.btn_hdri_up.setToolTip("Navigate up to parent folder")
@@ -750,7 +776,7 @@ class AssetLibraryWidget(QtWidgets.QWidget):
 
         self.hdri_nav_bar.addSpacing(6)
 
-        self.lbl_hdri_path = QtWidgets.QLabel("📁 HDRIs")
+        self.lbl_hdri_path = QtWidgets.QLabel("HDRIs")
         self.lbl_hdri_path.setStyleSheet("font-weight: bold; color: #e67e22; padding-left: 8px;")
         self.lbl_hdri_path.setFixedHeight(26)
         self.hdri_nav_bar.addWidget(self.lbl_hdri_path, 1)
@@ -825,7 +851,7 @@ class AssetLibraryWidget(QtWidgets.QWidget):
         self.hdri_splitter.setSizes([220, 650])
 
         hdri_vbox.addWidget(self.hdri_splitter, 1)
-        self.tabs.addTab(self.hdri_container, "🌅 HDRIs")
+        self.tabs.addTab(self.hdri_container, "HDRIs")
 
         # Gobo tab (dedicated as requested)
         self.gobo_grid = AssetGridWidget()
@@ -834,7 +860,7 @@ class AssetLibraryWidget(QtWidgets.QWidget):
         self.gobo_grid.assign_to_crucible_light_requested.connect(self.assign_to_crucible_light_requested.emit)
         self.gobo_grid.asset_selected.connect(
             lambda a: self.asset_applied.emit("gobo", a["path"]))
-        self.tabs.addTab(self.gobo_grid, "🔲 Gobos")
+        self.tabs.addTab(self.gobo_grid, "Gobos")
 
         # Scrim tab
         self.scrim_grid = AssetGridWidget()
@@ -842,15 +868,20 @@ class AssetLibraryWidget(QtWidgets.QWidget):
         self.scrim_grid.assign_to_crucible_light_requested.connect(self.assign_to_crucible_light_requested.emit)
         self.scrim_grid.asset_selected.connect(
             lambda a: self.asset_applied.emit("scrim", a["path"]))
-        self.tabs.addTab(self.scrim_grid, "🪟 Scrims")
+        self.tabs.addTab(self.scrim_grid, "Scrims")
 
         # Presets tab
         self.preset_list = PresetListWidget()
         self.preset_list.preset_selected.connect(self._on_preset_selected)
         self.preset_list.asset_modified.connect(self.refresh_library)
-        self.tabs.addTab(self.preset_list, "💡 Presets")
+        self.tabs.addTab(self.preset_list, "Presets")
 
         layout.addWidget(self.tabs, 1)
+
+    def stop_workers(self):
+        for grid in (getattr(self, "hdri_grid", None), getattr(self, "gobo_grid", None), getattr(self, "scrim_grid", None)):
+            if grid and hasattr(grid, "stop_worker"):
+                grid.stop_worker()
 
     def show_presets_tab(self):
         """Switch active tab to Presets."""
@@ -956,10 +987,10 @@ class AssetLibraryWidget(QtWidgets.QWidget):
         root = os.path.normpath(preset_manager.HDRI_DIR)
         cur = os.path.normpath(folder_path)
         if cur == root:
-            self.lbl_hdri_path.setText("📁 HDRIs (Root)")
+            self.lbl_hdri_path.setText("HDRIs (Root)")
         else:
             rel = os.path.relpath(cur, root).replace("\\", " / ")
-            self.lbl_hdri_path.setText(f"📁 HDRIs / {rel}")
+            self.lbl_hdri_path.setText(f"HDRIs / {rel}")
 
         # Load grid assets for this folder
         items = preset_manager.get_hdris(folder_path)
@@ -976,7 +1007,7 @@ class AssetLibraryWidget(QtWidgets.QWidget):
     def _populate_hdri_tree(self):
         self.hdri_tree.clear()
         root_dir = preset_manager.HDRI_DIR
-        root_item = QtWidgets.QTreeWidgetItem(self.hdri_tree, ["📁 All HDRIs"])
+        root_item = QtWidgets.QTreeWidgetItem(self.hdri_tree, ["All HDRIs"])
         root_item.setData(0, QtCore.Qt.UserRole, root_dir)
         root_item.setIcon(0, self.style().standardIcon(QtWidgets.QStyle.SP_DirIcon))
 

@@ -155,21 +155,21 @@ def get_hdri_contents(subpath=None):
     return folders + files
 
 
-def get_hdri_folder_tree(root_dir=None):
+def get_hdri_folder_tree(root_dir=None, _depth=0, _max_depth=4):
     """
     Return a nested dict of all subfolders under root_dir (defaults to HDRI_DIR).
-    e.g. {'Exterior': {'Sunny': {}, 'Overcast': {}}, 'Interior': {}}
+    Capped at _max_depth levels to prevent hangs on large studio network filesystems.
     """
     if root_dir is None:
         root_dir = HDRI_DIR
     tree = {}
-    if not os.path.isdir(root_dir):
+    if _depth >= _max_depth or not os.path.isdir(root_dir):
         return tree
     try:
         for entry in sorted(os.listdir(root_dir), key=lambda x: x.lower()):
             full_p = os.path.join(root_dir, entry)
-            if os.path.isdir(full_p) and not entry.startswith(".") and not entry.startswith("__"):
-                tree[entry] = get_hdri_folder_tree(full_p)
+            if os.path.isdir(full_p) and not os.path.islink(full_p) and not entry.startswith(".") and not entry.startswith("__"):
+                tree[entry] = get_hdri_folder_tree(full_p, _depth + 1, _max_depth)
     except Exception:
         pass
     return tree

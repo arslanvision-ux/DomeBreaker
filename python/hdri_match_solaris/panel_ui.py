@@ -88,11 +88,11 @@ def _get_create_or_update_material_library():
         print(f"[HDRI Match Solaris] Warning: Could not load create_or_update_material_library: {e}")
         return None
 
-# --- Crucible Light Studio Kill-Switch (Disabled by default) ---
-ENABLE_CRUCIBLE = os.environ.get("DOMEBREAKER_ENABLE_CRUCIBLE", "0") in ("1", "true", "True")
+# --- Crucible Light Studio Lazy Toggle (On by default, loaded strictly on demand) ---
+ENABLE_CRUCIBLE = os.environ.get("DOMEBREAKER_ENABLE_CRUCIBLE", "1") in ("1", "true", "True")
 
 def _find_crucible_root():
-    """Find the root path of Crucible Light Studio (disabled by default)."""
+    """Find the root path of Crucible Light Studio lazily."""
     if not ENABLE_CRUCIBLE:
         return None
     embedded = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "CrucibleLightStudio"))
@@ -127,24 +127,29 @@ def _find_crucible_root():
                 return os.path.abspath(cand)
     return None
 
-CRUCIBLE_ROOT = _find_crucible_root()
-CRUCIBLE_PARENT = os.path.dirname(CRUCIBLE_ROOT) if CRUCIBLE_ROOT else None
+CRUCIBLE_ROOT = None
+CRUCIBLE_PARENT = None
 
 def _ensure_crucible_environment():
-    """Ensure Crucible root and its parent are in sys.path and HDA is installed."""
+    """Lazily ensure Crucible root and its parent are in sys.path and HDA is installed."""
+    global CRUCIBLE_ROOT, CRUCIBLE_PARENT
     if not ENABLE_CRUCIBLE:
         return None
     c_root = _find_crucible_root()
     if not c_root:
         return None
+    CRUCIBLE_ROOT = c_root
     c_parent = os.path.dirname(c_root)
+    CRUCIBLE_PARENT = c_parent
     for _p in [c_parent, c_root]:
         if _p and os.path.exists(_p) and _p not in sys.path:
             sys.path.insert(0, _p)
     try:
         hda_file = os.path.join(c_root, "hda", "crucible_light_studio.hda")
         if os.path.exists(hda_file) and hou:
-            hou.hda.installFile(hda_file)
+            loaded = {f.replace("\\", "/") for f in hou.hda.loadedFiles()}
+            if hda_file.replace("\\", "/") not in loaded:
+                hou.hda.installFile(hda_file)
     except Exception:
         pass
     return c_root
@@ -1734,7 +1739,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        print("[DomeBreaker] Loading v2.0.2...")
+        print("[DomeBreaker] Loading v2.0.4...")
         self._initializing = True
         self._restoring_state = False
         if not parent and self.isWindow():
@@ -1805,7 +1810,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         restored = self._restore_state_from_scene(notify=False, allow_prefs=False)
         self._initializing = False
         self.log("DomeBreaker panel initialized. Ready.", "SUCCESS")
-        print("[DomeBreaker] Ready v2.0.3.")
+        print("[DomeBreaker] Ready v2.0.4.")
 
     def _get_bg_bake_worker(self):
         if self._bg_bake_worker is None:
@@ -1858,6 +1863,17 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     worker.wait(100)
                 except Exception:
                     pass
+        if getattr(self, "_crucible_panel", None) and hasattr(self._crucible_panel, "asset_library"):
+            try:
+                if hasattr(self._crucible_panel.asset_library, "stop_workers"):
+                    self._crucible_panel.asset_library.stop_workers()
+            except Exception:
+                pass
+        if getattr(self, "_floating_crucible_win", None):
+            try:
+                self._floating_crucible_win.close()
+            except Exception:
+                pass
         try:
             self._save_state()
         except Exception:
@@ -2063,9 +2079,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         )
         self.btn_reset_defaults.clicked.connect(lambda: self.reset_to_defaults(confirm=True))
 
-        self.btn_toggle_crucible = QtWidgets.QPushButton("HDRI Library")
+        self.btn_toggle_crucible = QtWidgets.QPushButton("Crucible Studio")
         self.btn_toggle_crucible.setCheckable(True)
-        self.btn_toggle_crucible.setToolTip("Show / Hide HDRI Library side panel (HDRIs, Gobos, Scrims, Lights, Presets)")
+        self.btn_toggle_crucible.setToolTip("Show / Hide Crucible Light Studio drawer (HDRIs, Gobos, Scrims, Lights, Presets)")
         self.btn_toggle_crucible.setStyleSheet(
             "QPushButton { background-color: #3d2600; color: #ffaa33; font-weight: bold; "
             "border: 1px solid #cc7700; border-radius: 4px; padding: 4px 12px; font-size: 12px; } "
@@ -2213,8 +2229,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self._build_crucible_section()
             self.main_splitter.addWidget(self._crucible_container)
             self.main_splitter.setStretchFactor(0, 1)
-            self.main_splitter.setStretchFactor(1, 1)
-            self.main_splitter.setSizes([550, 450])
+            self.main_splitter.setStretchFactor(1, 0)
+            self.main_splitter.setSizes([550, 0])
             main_layout.addWidget(self.main_splitter, 1)
         else:
             main_layout.addWidget(self.tabs_main, 1)
@@ -8339,9 +8355,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._crucible_container.setVisible(visible)
         self.btn_toggle_crucible.setChecked(visible)
         if visible:
-            self.setMinimumWidth(850)
-            total_w = max(self.width(), 950)
-            self.main_splitter.setSizes([450, total_w - 450])
+            self.setMinimumWidth(680)
+            total_w = max(self.width(), 900)
+            left_w = max(380, total_w // 2)
+            self.main_splitter.setSizes([left_w, total_w - left_w])
             if self._crucible_panel and hasattr(self._crucible_panel, "light_manager"):
                 try:
                     self._crucible_panel.light_manager.refresh_lights()
@@ -8349,6 +8366,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     pass
         else:
             self.setMinimumWidth(380)
+            self.main_splitter.setSizes([max(380, self.width()), 0])
 
     def _popout_crucible_window(self):
         """Pop out Crucible Studio into a separate floating window or dock back in."""

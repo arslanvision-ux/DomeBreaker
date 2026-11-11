@@ -417,11 +417,11 @@ class LightManagerWidget(QtWidgets.QWidget):
         self.btn_save_preset.setToolTip("Save selected light(s) as a preset")
         self.btn_save_preset.clicked.connect(self._on_save_preset)
 
-        self.btn_gradient = QtWidgets.QPushButton("🎨 Custom Gradient")
+        self.btn_gradient = QtWidgets.QPushButton("Custom Gradient")
         self.btn_gradient.setToolTip("Build a custom procedural gradient scrim")
         self.btn_gradient.clicked.connect(self.gradient_builder_requested.emit)
 
-        self.btn_refresh = QtWidgets.QPushButton("⟳ Refresh")
+        self.btn_refresh = QtWidgets.QPushButton("Refresh")
         self.btn_refresh.setToolTip("Re-scan stage for lights")
         self.btn_refresh.clicked.connect(self.refresh_lights)
 

@@ -44,8 +44,8 @@ class CrucibleLightStudioPanel(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("HDRI Library")
-        self.setMinimumSize(750, 600)
+        self.setWindowTitle("Crucible Light Studio")
+        self.setMinimumSize(420, 400)
 
         # Detect DCC and get backend
         self._dcc_name = detect_dcc()
@@ -54,6 +54,14 @@ class CrucibleLightStudioPanel(QtWidgets.QWidget):
         self._build_ui()
         self._connect_signals()
         self._initial_refresh()
+
+    def closeEvent(self, event):
+        if hasattr(self, "asset_library") and hasattr(self.asset_library, "stop_workers"):
+            try:
+                self.asset_library.stop_workers()
+            except Exception:
+                pass
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------
     # UI Construction
@@ -108,14 +116,14 @@ class CrucibleLightStudioPanel(QtWidgets.QWidget):
         header.setSpacing(8)
 
         # Logo / Title
-        logo_label = QtWidgets.QLabel("🔥 HDRI Library")
+        logo_label = QtWidgets.QLabel("Crucible Light Studio")
         logo_label.setStyleSheet(
             "color: #e67e22; font-size: 16px; font-weight: bold; "
             "letter-spacing: 1px;"
         )
         header.addWidget(logo_label)
 
-        self.btn_reload = QtWidgets.QPushButton("⟳ Reload UI")
+        self.btn_reload = QtWidgets.QPushButton("Reload UI")
         self.btn_reload.setToolTip("Reload Python scripts and UI")
         self.btn_reload.clicked.connect(self._on_reload_ui)
         self.btn_reload.hide()

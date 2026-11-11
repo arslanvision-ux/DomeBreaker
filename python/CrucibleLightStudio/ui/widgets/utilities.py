@@ -44,19 +44,19 @@ class UtilitiesToolbar(QtWidgets.QWidget):
         row2 = QtWidgets.QHBoxLayout()
         row2.setSpacing(6)
 
-        self.btn_fog = QtWidgets.QPushButton("🌫 Add Fog")
+        self.btn_fog = QtWidgets.QPushButton("Add Fog")
         self.btn_fog.setToolTip(
             "Add atmosphere volume (Karma/Arnold auto-detected)")
         self.btn_fog.setCheckable(True)
         self.btn_fog.clicked.connect(self._on_fog_toggled)
 
         self.btn_lens = QtWidgets.QPushButton(
-            "🔭 Lens Effects")
+            "Lens Effects")
         self.btn_lens.setToolTip("Add bloom, glare, vignette")
         self.btn_lens.clicked.connect(self.request_lens_fx.emit)
 
         self.btn_linking = QtWidgets.QPushButton(
-            "🔗 Light Linking")
+            "Light Linking")
         self.btn_linking.setToolTip(
             "Open light linking matrix (no extra nodes)")
         self.btn_linking.clicked.connect(self.request_light_linking.emit)
@@ -68,10 +68,10 @@ class UtilitiesToolbar(QtWidgets.QWidget):
 
     def _on_fog_toggled(self, checked):
         if checked:
-            self.btn_fog.setText("🌫 Remove Fog")
+            self.btn_fog.setText("Remove Fog")
             self.request_fog.emit()
         else:
-            self.btn_fog.setText("🌫 Add Fog")
+            self.btn_fog.setText("Add Fog")
             self.request_remove_fog.emit()
 
 
