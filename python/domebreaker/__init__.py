@@ -12,7 +12,7 @@ from hdri_match_solaris.panel_ui import (
     createInterface,
 )
 
-__version__ = "2.0.6"
+__version__ = "2.0.7"
 __all__ = [
     "HdriMatchSolarisPanel",
     "DomeBreakerPanel",

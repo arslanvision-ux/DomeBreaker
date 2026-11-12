@@ -1922,7 +1922,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        print("[DomeBreaker] Loading v2.0.6...")
+        print("[DomeBreaker] Loading v2.0.7...")
         self._initializing = True
         self._restoring_state = False
         if not parent and self.isWindow():
@@ -1995,7 +1995,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         restored = self._restore_state_from_scene(notify=False, allow_prefs=False)
         self._initializing = False
         self.log("DomeBreaker panel initialized. Ready.", "SUCCESS")
-        print("[DomeBreaker] Ready v2.0.6.")
+        print("[DomeBreaker] Ready v2.0.7.")
 
     def _get_bg_bake_worker(self):
         if self._bg_bake_worker is None:
@@ -2128,7 +2128,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lbl_t.setAlignment(QtCore.Qt.AlignCenter)
         lbl_t.setStyleSheet("font-size: 20px; font-weight: 900; color: #ffae19; letter-spacing: 2px;")
 
-        lbl_v = QtWidgets.QLabel("v2.0.6 - Solaris USD Lighting & Environment Suite")
+        lbl_v = QtWidgets.QLabel("v2.0.7 - Solaris USD Lighting & Environment Suite")
         lbl_v.setAlignment(QtCore.Qt.AlignCenter)
         lbl_v.setStyleSheet("font-size: 11px; font-weight: bold; color: #5dade2; letter-spacing: 0.8px;")
         title_box.addWidget(lbl_t)
@@ -2495,12 +2495,14 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             "ACES2065-1",
             "sRGB",
             "Rec.709",
+            "Raw",
         ]
         plate_presets = [
             "sRGB",
             "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)",
             "ACEScg",
             "Linear",
+            "Raw",
             "Linear Rec.709 (sRGB)",
             "Rec.709",
             "Rec.1886 Rec.709 - Display",
@@ -8276,6 +8278,32 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         mode_row.addWidget(self.btn_popout_preview, 0)
         lay.addLayout(mode_row)
 
+        # Viewer LUT & Exposure Normalization toolbar (0 EV / Raw-accurate by default)
+        lut_row = QtWidgets.QHBoxLayout()
+        lut_lbl = QtWidgets.QLabel("LUT:")
+        lut_lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: normal;")
+        self.combo_preview_lut = QtWidgets.QComboBox()
+        self.combo_preview_lut.addItems([
+            "Auto (OCIO / Raw-Aware)",
+            "Raw (Linear 1.0)",
+            "sRGB (OETF)",
+            "ACES 1.0 - SDR Video",
+        ])
+        self.combo_preview_lut.setToolTip(
+            "Preview Viewer LUT: Auto follows active OCIO Display/View (or Raw passthrough when Input/Plate Space is Raw); "
+            "choose Raw (Linear 1.0) to match Nuke Viewer = Raw."
+        )
+        self.chk_preview_auto_expose = QtWidgets.QCheckBox("Auto-Expose (p98)")
+        self.chk_preview_auto_expose.setChecked(False)
+        self.chk_preview_auto_expose.setToolTip(
+            "Normalize preview brightness to 98th percentile (off = true 0 EV matching Nuke/Solaris)"
+        )
+        self.chk_preview_auto_expose.setStyleSheet("color: #bbb; font-size: 11px;")
+        lut_row.addWidget(lut_lbl)
+        lut_row.addWidget(self.combo_preview_lut, 1)
+        lut_row.addWidget(self.chk_preview_auto_expose, 0)
+        lay.addLayout(lut_row)
+
         # Stacked widget for preview layouts
         self.preview_stack = QtWidgets.QStackedWidget()
 
@@ -8428,7 +8456,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 )
                 base_luma = 0.2126 * self._hdri_thumb_raw[..., 0] + 0.7152 * self._hdri_thumb_raw[..., 1] + 0.0722 * self._hdri_thumb_raw[..., 2]
                 p98 = float(np.percentile(base_luma, 98))
-                self._hdri_base_norm = (0.9 / max(1e-5, p98))
+                self._hdri_auto_norm = (0.9 / max(1e-5, p98))
+                self._hdri_base_norm = 1.0
 
             if hasattr(self, '_hdri_orig_full') and self._hdri_orig_full is not None:
                 self._hdri_full_array = self._csm.transform_image(
@@ -8442,7 +8471,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 )
                 p_luma = 0.2126 * self._plate_thumb_raw[..., 0] + 0.7152 * self._plate_thumb_raw[..., 1] + 0.0722 * self._plate_thumb_raw[..., 2]
                 p_p98 = float(np.percentile(p_luma, 98))
-                self._plate_base_norm = (0.9 / max(1e-5, p_p98))
+                self._plate_auto_norm = (0.9 / max(1e-5, p_p98))
+                self._plate_base_norm = 1.0
 
             if hasattr(self, '_plate_orig_full') and self._plate_orig_full is not None:
                 self._plate_full_array = self._csm.transform_image(
@@ -9511,6 +9541,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         # Live preview connections
         self.combo_preview_mode.currentIndexChanged.connect(self._on_preview_mode_changed)
+        self.combo_preview_lut.currentIndexChanged.connect(self._update_all_previews)
+        self.chk_preview_auto_expose.toggled.connect(self._update_all_previews)
         self.sld_wipe.valueChanged.connect(self._update_all_previews)
         self.txt_hdri.textChanged.connect(self._on_hdri_text_changed)
         self.txt_plate.textChanged.connect(self._on_plate_text_changed)
@@ -11305,6 +11337,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             state["_baked_sat"] = getattr(self, '_baked_sat', 1.0)
             state["_baked_contrast"] = getattr(self, '_baked_contrast', 1.0)
             state["auto_bake"] = self.chk_auto_bake.isChecked() if hasattr(self, 'chk_auto_bake') else True
+            if hasattr(self, 'combo_preview_lut'):
+                state["preview_lut"] = self.combo_preview_lut.currentText()
+            if hasattr(self, 'chk_preview_auto_expose'):
+                state["preview_auto_expose"] = self.chk_preview_auto_expose.isChecked()
 
             state_json = json.dumps(state, indent=2)
 
@@ -11525,7 +11561,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                              'chk_sun_reconstruct', 'sld_sun_turbidity', 'sld_sun_reconstruct_blend',
                              'cmb_sun_radiometry_mode', 'grp_aov', 'chk_aov_lightgroups',
                              'txt_dome_lg', 'txt_sun_lg', 'txt_practicals_lg',
-                             'combo_input_cs', 'combo_plate_cs', 'chk_auto_cal', 'chk_protect_sun',
+                             'combo_input_cs', 'combo_plate_cs', 'combo_preview_lut', 'chk_preview_auto_expose',
+                             'chk_auto_cal', 'chk_protect_sun',
                              'combo_sky_mode', 'chk_auto_bake', 'chk_bake_ground_warp', 'chk_extract_inpaint',
                              'sld_room_width', 'sld_room_depth', 'sld_room_height',
                              'sld_cam_offset_x', 'sld_cam_offset_z', 'chk_room_floor',
@@ -11825,6 +11862,12 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                         self.combo_sky_mode.setCurrentIndex(idx)
                 if "auto_bake" in state and hasattr(self, 'chk_auto_bake'):
                     self.chk_auto_bake.setChecked(bool(state["auto_bake"]))
+                if "preview_lut" in state and hasattr(self, 'combo_preview_lut'):
+                    idx = self.combo_preview_lut.findText(str(state["preview_lut"]))
+                    if idx >= 0:
+                        self.combo_preview_lut.setCurrentIndex(idx)
+                if "preview_auto_expose" in state and hasattr(self, 'chk_preview_auto_expose'):
+                    self.chk_preview_auto_expose.setChecked(bool(state["preview_auto_expose"]))
 
                 # 11. Load previews while _restoring_state = True (auto_cal and auto_bake will NOT fire)
                 if hdri_path:
@@ -11926,7 +11969,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                          'chk_sun_reconstruct', 'sld_sun_turbidity', 'sld_sun_reconstruct_blend',
                          'cmb_sun_radiometry_mode', 'grp_aov', 'chk_aov_lightgroups',
                          'txt_dome_lg', 'txt_sun_lg', 'txt_practicals_lg',
-                         'combo_input_cs', 'combo_plate_cs', 'chk_auto_cal', 'chk_protect_sun',
+                         'combo_input_cs', 'combo_plate_cs', 'combo_preview_lut', 'chk_preview_auto_expose',
+                         'chk_auto_cal', 'chk_protect_sun',
                          'combo_sky_mode', 'combo_proj_mode', 'chk_auto_bake', 'chk_bake_ground_warp', 'chk_extract_inpaint',
                          'sld_room_width', 'sld_room_depth', 'sld_room_height',
                          'sld_cam_offset_x', 'sld_cam_offset_z', 'chk_room_floor',
@@ -11984,6 +12028,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 self.chk_protect_sun.setChecked(False)
             if hasattr(self, 'chk_auto_bake'):
                 self.chk_auto_bake.setChecked(True)
+            if hasattr(self, 'combo_preview_lut'):
+                self.combo_preview_lut.setCurrentIndex(0)
+            if hasattr(self, 'chk_preview_auto_expose'):
+                self.chk_preview_auto_expose.setChecked(False)
 
             # 3. Horizon Section
             if hasattr(self, 'grp_horizon'):
@@ -12369,6 +12417,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._hdri_full_array = None
         self._hdri_orig_full = None
         self._hdri_base_norm = None
+        self._hdri_auto_norm = None
         self._current_calibrated_path = None
         self.reset_calibration(revert_reason="HDRI removed")
 
@@ -12403,6 +12452,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._plate_orig_full = None
         self._plate_orig_shape = None
         self._plate_base_norm = None
+        self._plate_auto_norm = None
         self.reset_calibration(revert_reason="Plate removed")
         self._sync_node()
         self._save_state()
@@ -12568,6 +12618,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         if arr is None:
             return None
         img = arr.copy()
+        auto_expose_chk = getattr(self, 'chk_preview_auto_expose', None)
+        use_auto_expose = bool(
+            auto_expose_chk is not None
+            and callable(getattr(auto_expose_chk, 'isChecked', None))
+            and auto_expose_chk.isChecked()
+        )
+
         if apply_calib:
             # 1. Exposure EV offset
             ev = float(self.sld_ev.value())
@@ -12659,34 +12716,108 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 if shift_x != 0:
                     img = np.roll(img, shift_x, axis=1)
 
-            # Apply base reference normalization so EV brightens/darkens predictably
-            norm = getattr(self, '_hdri_base_norm', None)
-            if norm is None:
-                base_luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-                if base_luma.size > 200000:
-                    step = int(math.ceil(math.sqrt(base_luma.size / 100000.0)))
-                    p98 = float(np.percentile(base_luma[::step, ::step], 98))
-                else:
-                    p98 = float(np.percentile(base_luma, 98))
-                norm = (0.9 / max(1e-5, p98))
-            img *= norm
+            if use_auto_expose:
+                norm = getattr(self, '_hdri_auto_norm', None)
+                if norm is None:
+                    base_luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+                    if base_luma.size > 200000:
+                        step = int(math.ceil(math.sqrt(base_luma.size / 100000.0)))
+                        p98 = float(np.percentile(base_luma[::step, ::step], 98))
+                    else:
+                        p98 = float(np.percentile(base_luma, 98))
+                    norm = (0.9 / max(1e-5, p98))
+                if norm != 1.0:
+                    img *= norm
+            else:
+                norm = float(getattr(self, '_hdri_base_norm', None) or 1.0)
+                if norm != 1.0:
+                    img *= norm
         else:
-            # Neutral reference tone-mapping
-            norm = getattr(self, '_plate_base_norm', None)
-            if norm is None:
-                luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-                if luma.size > 200000:
-                    step = int(math.ceil(math.sqrt(luma.size / 100000.0)))
-                    p98 = float(np.percentile(luma[::step, ::step], 98))
-                else:
-                    p98 = float(np.percentile(luma, 98))
-                norm = (0.9 / max(1e-5, p98))
-                self._plate_base_norm = norm
-            img *= norm
+            # Neutral 0 EV reference preview by default; p98 normalization only when Auto-Expose is enabled
+            if use_auto_expose:
+                norm = getattr(self, '_plate_auto_norm', None)
+                if norm is None:
+                    luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+                    if luma.size > 200000:
+                        step = int(math.ceil(math.sqrt(luma.size / 100000.0)))
+                        p98 = float(np.percentile(luma[::step, ::step], 98))
+                    else:
+                        p98 = float(np.percentile(luma, 98))
+                    norm = (0.9 / max(1e-5, p98))
+                    self._plate_auto_norm = norm
+                if norm != 1.0:
+                    img *= norm
+            else:
+                norm = float(getattr(self, '_plate_base_norm', None) or 1.0)
+                if norm != 1.0:
+                    img *= norm
 
-        np.nan_to_num(img, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        lut_combo = getattr(self, 'combo_preview_lut', None)
+        lut_text = (
+            lut_combo.currentText().strip()
+            if lut_combo is not None and callable(getattr(lut_combo, 'currentText', None))
+            else "Auto (OCIO / Raw-Aware)"
+        )
+        lut_low = lut_text.lower()
+        if "raw" in lut_low:
+            lut_mode = "raw"
+        elif "srgb" in lut_low:
+            lut_mode = "srgb"
+        elif "aces" in lut_low:
+            lut_mode = "aces"
+        else:
+            lut_mode = "auto"
+
+        cs_widget = getattr(self, 'combo_input_cs' if apply_calib else 'combo_plate_cs', None)
+        src_cs = (
+            cs_widget.currentText().strip()
+            if cs_widget is not None and callable(getattr(cs_widget, 'currentText', None))
+            else ("Linear" if apply_calib else "sRGB")
+        )
+
+        from hdri_match.core.colorspace import ColorSpaceManager
+        if getattr(self, '_csm', None) is None:
+            self._csm = ColorSpaceManager()
+        csm = self._csm
+
+        np.nan_to_num(img, copy=False, nan=0.0, posinf=65504.0, neginf=0.0)
+
+        if lut_mode == "raw" or (lut_mode == "auto" and ColorSpaceManager.is_raw_space(src_cs)):
+            # Exact Raw / linear 1.0 passthrough (matches Nuke Read=raw / Viewer=Raw)
+            pass
+        elif lut_mode == "srgb":
+            img = csm.transform_image(img, "Linear", "sRGB")
+        elif lut_mode == "aces":
+            if csm.config is not None:
+                disp, default_view = csm.get_default_display_view(prefer_srgb=True)
+                view = default_view
+                if disp:
+                    for v in csm._iter_views(disp):
+                        if "aces" in v.lower() and "sdr" in v.lower():
+                            view = v
+                            break
+                img = csm.apply_display_transform(img, "Linear", view=view, display=disp)
+            else:
+                img = csm.transform_image(img, "Linear", "ACES 1.0 - SDR Video (sRGB - Display)")
+        else:
+            if csm.config is not None:
+                disp, view = csm.get_default_display_view(prefer_srgb=True)
+                img = csm.apply_display_transform(img, "Linear", view=view, display=disp)
+            else:
+                src_low = src_cs.lower()
+                if (
+                    not apply_calib
+                    and csm.is_display_referred(src_cs)
+                    and "aces" not in src_low
+                    and "sdr video" not in src_low
+                ):
+                    enc_target = "Rec.709" if ("709" in src_low or "1886" in src_low) else "sRGB"
+                    img = csm.transform_image(img, "Linear", enc_target)
+                else:
+                    img = csm.transform_image(img, "Linear", "ACES 1.0 - SDR Video (sRGB - Display)")
+
+        np.nan_to_num(img, copy=False, nan=0.0, posinf=1.0, neginf=0.0)
         np.clip(img, 0.0, 1.0, out=img)
-        np.power(img, 1.0 / 2.2, out=img)
         return (img * 255.0).astype(np.uint8)
 
     def _arr_to_pixmap(self, u8_arr):

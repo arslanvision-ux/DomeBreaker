@@ -17,6 +17,7 @@ class ColorSpaceManager:
         "Rec.709",
         "ACEScc",
         "ACEScct",
+        "Raw",
     ]
 
     DEFAULT_DISPLAY_VIEWS = [
@@ -171,6 +172,43 @@ class ColorSpaceManager:
                 inner_idx = s.rfind(" (", 0, inner_idx)
         return None
 
+    @staticmethod
+    def is_raw_space(space_name: str) -> bool:
+        """Return True if space_name represents Raw / data passthrough or a Raw Display view."""
+        s = (space_name or "").strip().lower()
+        return s in ("raw", "utility - raw") or s.startswith("raw (")
+
+    def get_default_display_view(self, prefer_srgb: bool = True):
+        """Return (display, view) for active OCIO config, preferring sRGB monitor display when requested."""
+        if not self.config:
+            return (None, "sRGB")
+        try:
+            displays = self._iter_displays()
+            disp = self.config.getDefaultDisplay()
+            if prefer_srgb and displays:
+                for cand in displays:
+                    c_low = cand.lower()
+                    if "srgb" in c_low and "display" in c_low:
+                        disp = cand
+                        break
+                else:
+                    for cand in displays:
+                        if "srgb" in cand.lower():
+                            disp = cand
+                            break
+            view = self.config.getDefaultView(disp) if hasattr(self.config, "getDefaultView") else None
+            views = self._iter_views(disp)
+            if not view or (view.strip().lower() == "raw" and views):
+                for v in views:
+                    if v.strip().lower() != "raw":
+                        view = v
+                        break
+            if not view:
+                view = views[0] if views else "sRGB"
+            return (disp, view)
+        except Exception:
+            return (None, "sRGB")
+
     def parse_display_view(self, space_name: str):
         """Parse 'View (Display)' into (display, view), or return None for ColorSpaces."""
         if not space_name or not isinstance(space_name, str):
@@ -211,6 +249,8 @@ class ColorSpaceManager:
 
     def is_display_referred(self, space_name: str) -> bool:
         """Return True if space_name represents a display-referred / OETF encoding."""
+        if self.is_raw_space(space_name):
+            return False
         dv = self.parse_display_view(space_name)
         if dv is not None:
             _disp, view = dv
@@ -276,14 +316,96 @@ class ColorSpaceManager:
             return np.ascontiguousarray(out, dtype=np.float32)
         return arr
 
+    def _resolve_ocio_space(self, space_name: str):
+        """Resolve a user-facing ColorSpace name or alias against active self.config."""
+        if not self.config or not space_name:
+            return None
+        cs = self.config.getColorSpace(space_name)
+        if cs is not None:
+            return cs.getName() if hasattr(cs, "getName") else space_name
+
+        aliases = {
+            "Linear": [
+                "scene_linear", "Linear", "linear",
+                "Linear Rec.709 (sRGB)", "Linear - sRGB",
+                "Utility - Linear - sRGB", "Utility - Linear - Rec.709",
+                "lin_srgb", "ACEScg", "ACES - ACEScg",
+            ],
+            "Linear - sRGB": [
+                "Linear Rec.709 (sRGB)", "Linear - sRGB",
+                "Utility - Linear - sRGB", "Utility - Linear - Rec.709",
+                "lin_srgb", "scene_linear",
+            ],
+            "Linear Rec.709 (sRGB)": [
+                "Linear Rec.709 (sRGB)", "Linear - sRGB",
+                "Utility - Linear - sRGB", "Utility - Linear - Rec.709",
+                "lin_srgb", "scene_linear",
+            ],
+            "sRGB": [
+                "sRGB - Texture", "sRGB Encoded Rec.709 (sRGB)",
+                "Utility - sRGB - Texture", "Output - sRGB",
+                "sRGB - Display", "srgb",
+            ],
+            "Rec709": [
+                "Gamma 2.4 Rec.709 - Texture", "Rec.1886 Rec.709 - Display",
+                "Utility - Rec.709 - Texture", "Output - Rec.709",
+                "Rec.709 - Texture", "rec709",
+            ],
+            "Rec.709": [
+                "Gamma 2.4 Rec.709 - Texture", "Rec.1886 Rec.709 - Display",
+                "Utility - Rec.709 - Texture", "Output - Rec.709",
+                "Rec.709 - Texture", "rec709",
+            ],
+            "Rec.1886 Rec.709 - Display": [
+                "Rec.1886 Rec.709 - Display", "Gamma 2.4 Rec.709 - Texture",
+                "Output - Rec.709", "Rec.709", "rec709",
+            ],
+            "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)": [
+                "Output - Rec.709", "Output - sRGB",
+            ],
+            "ACES 1.0 - SDR Video (sRGB - Display)": [
+                "Output - sRGB", "sRGB - Display",
+            ],
+            "Un-tone-mapped (Rec.1886 Rec.709 - Display)": [
+                "Rec.1886 Rec.709 - Display", "Gamma 2.4 Rec.709 - Texture",
+            ],
+            "Un-tone-mapped (sRGB - Display)": [
+                "sRGB - Display", "sRGB - Texture", "sRGB Encoded Rec.709 (sRGB)",
+            ],
+            "ACEScg": ["ACEScg", "ACES - ACEScg", "acescg", "cg"],
+            "ACES2065-1": ["ACES2065-1", "ACES - ACES2065-1", "aces2065-1"],
+            "ACEScc": ["ACEScc", "ACES - ACEScc", "acescc"],
+            "ACEScct": ["ACEScct", "ACES - ACEScct", "acescct"],
+            "Raw": ["Raw", "raw", "Utility - Raw"],
+        }
+
+        for attempt in aliases.get(space_name, []):
+            cs_a = self.config.getColorSpace(attempt)
+            if cs_a is not None:
+                return cs_a.getName() if hasattr(cs_a, "getName") else attempt
+
+        low = space_name.strip().lower()
+        for cs_item in self.config.getColorSpaces():
+            name = cs_item.getName()
+            if name.lower() == low:
+                return name
+        return None
+
     def apply_display_transform(self, image: np.ndarray, src_space: str, view: str = "sRGB", display: str = None) -> np.ndarray:
         """Applies a display transform using OCIO (e.g. RRT+ODT for ACES) or fallback."""
+        if image is None:
+            return None
         dv = self.parse_display_view(view)
         if dv is not None:
             disp_name, view_name = dv
         else:
             disp_name = display
             view_name = view
+
+        if self.is_raw_space(view) or (view_name and view_name.strip().lower() == "raw"):
+            out = np.asarray(image, dtype=np.float32).copy()
+            np.nan_to_num(out, copy=False, nan=0.0, posinf=1.0, neginf=0.0)
+            return np.clip(out, 0.0, 1.0)
 
         if not self.config:
             if view_name == "sRGB" and "acescg" in (src_space or "").lower() and disp_name is None:
@@ -301,7 +423,8 @@ class ColorSpaceManager:
 
         try:
             target_display = disp_name or self.config.getDefaultDisplay()
-            processor = self._build_display_view_processor(src_space, target_display, view_name, inverse=False)
+            resolved_src = self._resolve_ocio_space(src_space) or src_space
+            processor = self._build_display_view_processor(resolved_src, target_display, view_name, inverse=False)
             return self._apply_ocio_processor(processor, image)
         except Exception as e:
             print(f"DisplayViewTransform failed, falling back to direct transform: {e}")
@@ -317,96 +440,26 @@ class ColorSpaceManager:
             return None
         if src_space == dst_space:
             return image
+        if self.is_raw_space(src_space) or self.is_raw_space(dst_space):
+            out = np.ascontiguousarray(image, dtype=np.float32).copy()
+            np.nan_to_num(out, copy=False, nan=0.0, posinf=65504.0, neginf=0.0)
+            return out
 
         if not self.config:
             return self._fallback_transform(image, src_space, dst_space)
 
         real_dst = None
         try:
-            def resolve_space(space_name):
-                if not space_name:
-                    return None
-                cs = self.config.getColorSpace(space_name)
-                if cs is not None:
-                    return cs.getName() if hasattr(cs, "getName") else space_name
-
-                aliases = {
-                    "Linear": [
-                        "scene_linear", "Linear", "linear",
-                        "Linear Rec.709 (sRGB)", "Linear - sRGB",
-                        "Utility - Linear - sRGB", "Utility - Linear - Rec.709",
-                        "lin_srgb", "ACEScg", "ACES - ACEScg",
-                    ],
-                    "Linear - sRGB": [
-                        "Linear Rec.709 (sRGB)", "Linear - sRGB",
-                        "Utility - Linear - sRGB", "Utility - Linear - Rec.709",
-                        "lin_srgb", "scene_linear",
-                    ],
-                    "Linear Rec.709 (sRGB)": [
-                        "Linear Rec.709 (sRGB)", "Linear - sRGB",
-                        "Utility - Linear - sRGB", "Utility - Linear - Rec.709",
-                        "lin_srgb", "scene_linear",
-                    ],
-                    "sRGB": [
-                        "sRGB - Texture", "sRGB Encoded Rec.709 (sRGB)",
-                        "Utility - sRGB - Texture", "Output - sRGB",
-                        "sRGB - Display", "srgb",
-                    ],
-                    "Rec709": [
-                        "Gamma 2.4 Rec.709 - Texture", "Rec.1886 Rec.709 - Display",
-                        "Utility - Rec.709 - Texture", "Output - Rec.709",
-                        "Rec.709 - Texture", "rec709",
-                    ],
-                    "Rec.709": [
-                        "Gamma 2.4 Rec.709 - Texture", "Rec.1886 Rec.709 - Display",
-                        "Utility - Rec.709 - Texture", "Output - Rec.709",
-                        "Rec.709 - Texture", "rec709",
-                    ],
-                    "Rec.1886 Rec.709 - Display": [
-                        "Rec.1886 Rec.709 - Display", "Gamma 2.4 Rec.709 - Texture",
-                        "Output - Rec.709", "Rec.709", "rec709",
-                    ],
-                    "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)": [
-                        "Output - Rec.709", "Output - sRGB",
-                    ],
-                    "ACES 1.0 - SDR Video (sRGB - Display)": [
-                        "Output - sRGB", "sRGB - Display",
-                    ],
-                    "Un-tone-mapped (Rec.1886 Rec.709 - Display)": [
-                        "Rec.1886 Rec.709 - Display", "Gamma 2.4 Rec.709 - Texture",
-                    ],
-                    "Un-tone-mapped (sRGB - Display)": [
-                        "sRGB - Display", "sRGB - Texture", "sRGB Encoded Rec.709 (sRGB)",
-                    ],
-                    "ACEScg": ["ACEScg", "ACES - ACEScg", "acescg", "cg"],
-                    "ACES2065-1": ["ACES2065-1", "ACES - ACES2065-1", "aces2065-1"],
-                    "ACEScc": ["ACEScc", "ACES - ACEScc", "acescc"],
-                    "ACEScct": ["ACEScct", "ACES - ACEScct", "acescct"],
-                }
-
-                for attempt in aliases.get(space_name, []):
-                    cs_a = self.config.getColorSpace(attempt)
-                    if cs_a is not None:
-                        return cs_a.getName() if hasattr(cs_a, "getName") else attempt
-
-                # Case-insensitive name scan
-                low = space_name.strip().lower()
-                for cs_item in self.config.getColorSpaces():
-                    name = cs_item.getName()
-                    if name.lower() == low:
-                        return name
-                return None
-
             src_dv = self._match_config_display_view(src_space)
             dst_dv = self._match_config_display_view(dst_space)
 
-            real_src = None if src_dv else resolve_space(src_space)
-            real_dst = None if dst_dv else resolve_space(dst_space)
+            real_src = None if src_dv else self._resolve_ocio_space(src_space)
+            real_dst = None if dst_dv else self._resolve_ocio_space(dst_space)
 
             if src_dv and dst_dv:
                 if src_dv == dst_dv:
                     return np.ascontiguousarray(image, dtype=np.float32)
-                working_cs = resolve_space("Linear")
+                working_cs = self._resolve_ocio_space("Linear")
                 if not working_cs:
                     raise ValueError("Cannot resolve scene_linear working color space.")
                 proc_inv = self._build_display_view_processor(working_cs, src_dv[0], src_dv[1], inverse=True)

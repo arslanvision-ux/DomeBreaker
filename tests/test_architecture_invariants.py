@@ -155,21 +155,21 @@ def _ensure_fake_qt_if_absent(monkeypatch):
 
 def test_version_consistency():
     with open(os.path.join(REPO_ROOT, "VERSION"), "r", encoding="utf-8") as f:
-        assert f.read().strip() == "v2.0.6"
+        assert f.read().strip() == "v2.0.7"
 
     with open(os.path.join(PYTHON_ROOT, "hdri_match_solaris", "__init__.py"), "r", encoding="utf-8") as f:
         sol_init = f.read()
-    assert '__version__ = "2.0.6"' in sol_init
+    assert '__version__ = "2.0.7"' in sol_init
     assert '__houdini_min__ = "20.0"' in sol_init
 
     with open(os.path.join(PYTHON_ROOT, "domebreaker", "__init__.py"), "r", encoding="utf-8") as f:
         db_init = f.read()
-    assert '__version__ = "2.0.6"' in db_init
+    assert '__version__ = "2.0.7"' in db_init
 
     with open(os.path.join(PYTHON_ROOT, "hdri_match_solaris", "panel_ui.py"), "r", encoding="utf-8") as f:
         panel_src = f.read()
-    assert "Loading v2.0.6..." in panel_src
-    assert "v2.0.6 - Solaris USD Lighting & Environment Suite" in panel_src
+    assert "Loading v2.0.7..." in panel_src
+    assert "v2.0.7 - Solaris USD Lighting & Environment Suite" in panel_src
 
 
 def test_no_c1_mojibake_orphan_fe0f_or_4byte_emojis():
@@ -921,9 +921,9 @@ def test_updater_zip_slip_blocked_and_safe_extract_works(monkeypatch, tmp_path):
     good_zip = tmp_path / "good.zip"
     safe_dir = tmp_path / "safe_out"
     with zipfile.ZipFile(good_zip, "w") as zf:
-        zf.writestr("DomeBreaker-main/VERSION", "v2.0.6\n")
+        zf.writestr("DomeBreaker-main/VERSION", "v2.0.7\n")
     upd._safe_extract_zip(str(good_zip), str(safe_dir))
-    assert (safe_dir / "DomeBreaker-main" / "VERSION").read_text(encoding="utf-8").strip() == "v2.0.6"
+    assert (safe_dir / "DomeBreaker-main" / "VERSION").read_text(encoding="utf-8").strip() == "v2.0.7"
 
 
 # ---------------------------------------------------------------------------
@@ -1365,3 +1365,134 @@ def test_hda_lop_and_panel_plate_colorspace_integration(monkeypatch, tmp_path):
     assert "sky" in sampled_colors and "ground" in sampled_colors
     assert np.allclose(sampled_colors["sky"], (1.0, 1.0, 1.0), atol=1e-4)
     assert np.allclose(sampled_colors["ground"], (1.0, 1.0, 1.0), atol=1e-4)
+
+
+def test_colorspace_raw_passthrough_ocio_and_fallback(monkeypatch):
+    from hdri_match.core import colorspace
+
+    class _FailIfCalledConfig:
+        def getColorSpaces(self):
+            return [types.SimpleNamespace(getName=lambda: "ACEScg"), types.SimpleNamespace(getName=lambda: "Raw")]
+
+        def getDisplays(self):
+            return ["sRGB - Display", "Rec.1886 Rec.709 - Display"]
+
+        def getViews(self, disp):
+            return ["ACES 1.0 - SDR Video", "Raw"]
+
+        def getDefaultDisplay(self):
+            return "Rec.1886 Rec.709 - Display"
+
+        def getDefaultView(self, disp):
+            return "Raw" if disp == "sRGB - Display" else "ACES 1.0 - SDR Video"
+
+        def getColorSpace(self, name):
+            if name in ("ACEScg", "scene_linear", "Raw"):
+                return types.SimpleNamespace(getName=lambda n=name: "ACEScg" if n == "scene_linear" else n)
+            return None
+
+        def getProcessor(self, *a, **k):
+            raise AssertionError("OCIO getProcessor must NOT be called for Raw passthrough")
+
+    csm_live = object.__new__(colorspace.ColorSpaceManager)
+    csm_live.config_path = None
+    csm_live._printed_errors = set()
+    csm_live.config = _FailIfCalledConfig()
+    csm_live._builtin_spaces = []
+
+    assert csm_live.is_raw_space("Raw") is True
+    assert csm_live.is_raw_space("Utility - Raw") is True
+    assert csm_live.is_raw_space("Raw (Rec.1886 Rec.709 - Display)") is True
+    assert csm_live.is_display_referred("Raw") is False
+    assert csm_live.is_display_referred("Raw (Rec.1886 Rec.709 - Display)") is False
+    assert csm_live.get_default_display_view(prefer_srgb=True) == ("sRGB - Display", "ACES 1.0 - SDR Video")
+
+    raw_img = np.array([[[0.005, 0.005, 0.005], [2.0, 0.1, 0.0]]], dtype=np.float32)
+    for src_sp in ("Raw", "Utility - Raw", "Raw (Rec.1886 Rec.709 - Display)"):
+        out_lin = csm_live.transform_image(raw_img, src_sp, "Linear")
+        assert np.allclose(out_lin, raw_img, atol=1e-7)
+        assert out_lin is not raw_img
+
+    disp_raw = csm_live.apply_display_transform(raw_img, "Linear", view="Raw (Rec.1886 Rec.709 - Display)")
+    assert np.allclose(disp_raw[0, 0], [0.005, 0.005, 0.005], atol=1e-7)
+    assert np.allclose(disp_raw[0, 1], [1.0, 0.1, 0.0], atol=1e-7)
+
+    monkeypatch.setattr(colorspace, "OCIO", None)
+    csm_fb = colorspace.ColorSpaceManager()
+    assert "Raw" in csm_fb.get_color_spaces()
+    assert csm_fb.get_default_display_view() == (None, "sRGB")
+    assert np.allclose(csm_fb.transform_image(raw_img, "Raw", "Linear"), raw_img, atol=1e-7)
+    assert np.allclose(csm_fb.transform_image(raw_img, "Linear", "Raw"), raw_img, atol=1e-7)
+
+
+def test_dark_night_plate_preview_0ev_raw_and_aces_no_overbrightening(monkeypatch):
+    _ensure_fake_qt_if_absent(monkeypatch)
+    monkeypatch.delitem(sys.modules, "hdri_match_solaris.panel_ui", raising=False)
+    from hdri_match.core import colorspace
+    from hdri_match_solaris import panel_ui
+
+    monkeypatch.setattr(colorspace, "OCIO", None)
+
+    class _FakeCombo:
+        def __init__(self, items, current=0):
+            self.items = list(items)
+            self.idx = current
+
+        def findText(self, text):
+            return self.items.index(text) if text in self.items else -1
+
+        def setCurrentIndex(self, idx):
+            self.idx = idx
+
+        def currentIndex(self):
+            return self.idx
+
+        def currentText(self):
+            return self.items[self.idx]
+
+    class _FakeCheck:
+        def __init__(self, checked=False):
+            self.checked = checked
+
+        def isChecked(self):
+            return self.checked
+
+    # Simulated dark night room (98%+ pixels ~ 0.005, tiny bright LED strip 2.0 at <2%)
+    night = np.full((100, 100, 3), 0.005, dtype=np.float32)
+    night[98:, :50, :] = np.array([0.05, 0.5, 2.0], dtype=np.float32)
+
+    fake_panel = types.SimpleNamespace(
+        combo_input_cs=_FakeCombo(["Linear", "ACEScg", "Raw"]),
+        combo_plate_cs=_FakeCombo(["sRGB", "ACEScg", "Raw"], current=2),
+        combo_preview_lut=_FakeCombo(["Auto (OCIO / Raw-Aware)", "Raw (Linear 1.0)", "sRGB (OETF)", "ACES 1.0 - SDR Video"]),
+        chk_preview_auto_expose=_FakeCheck(False),
+        chk_auto_cal=_FakeCheck(False),
+        _restoring_state=True,
+        _plate_orig_thumb=night.copy(),
+        _plate_orig_full=night.copy(),
+        log=lambda *a, **k: None,
+        log_error=lambda *a, **k: None,
+        _update_all_previews=lambda: None,
+    )
+
+    panel_ui.HdriMatchSolarisPanel._apply_input_colorspace(fake_panel, notify_ui=False)
+    assert fake_panel._plate_base_norm == 1.0
+    assert fake_panel._plate_auto_norm > 50.0  # Stored separately, NOT applied by default
+
+    # 1. Raw plate at 0 EV with Auto LUT -> exact linear passthrough (no 0.9/p98 lift, no 1/2.2 gamma)
+    u8_raw = panel_ui.HdriMatchSolarisPanel._tonemap_array(fake_panel, fake_panel._plate_thumb_raw, apply_calib=False)
+    assert int(u8_raw[10, 10, 0]) <= 2
+    assert int(u8_raw[99, 10, 2]) == 255
+
+    # 2. ACEScg plate at 0 EV with Auto LUT -> filmic ACES SDR curve, dark shadows remain genuinely dark
+    fake_panel.combo_plate_cs.setCurrentIndex(1)  # ACEScg
+    panel_ui.HdriMatchSolarisPanel._apply_input_colorspace(fake_panel, notify_ui=False)
+    u8_aces = panel_ui.HdriMatchSolarisPanel._tonemap_array(fake_panel, fake_panel._plate_thumb_raw, apply_calib=False)
+    assert int(u8_aces[10, 10, 0]) <= 25
+
+    # 3. Explicit Auto-Expose (p98) opt-in reveals shadow detail when requested
+    fake_panel.combo_plate_cs.setCurrentIndex(2)  # Raw
+    panel_ui.HdriMatchSolarisPanel._apply_input_colorspace(fake_panel, notify_ui=False)
+    fake_panel.chk_preview_auto_expose.checked = True
+    u8_auto_exp = panel_ui.HdriMatchSolarisPanel._tonemap_array(fake_panel, fake_panel._plate_thumb_raw, apply_calib=False)
+    assert int(u8_auto_exp[10, 10, 0]) > 50
