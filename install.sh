@@ -6,7 +6,7 @@
 set -e
 
 echo "================================================================="
-echo "   ⚡ DomeBreaker - Solaris USD Suite Installer (Linux)"
+echo "   [DomeBreaker] Solaris USD Suite Installer (Linux)"
 echo "================================================================="
 echo ""
 
@@ -64,7 +64,7 @@ if [ "$FOUND_EXISTING" -eq 1 ]; then
             fi
         done
         echo "================================================================="
-        echo "🎉 DomeBreaker uninstalled from ${UNINSTALLED} Houdini version(s)."
+        echo "[SUCCESS] DomeBreaker uninstalled from ${UNINSTALLED} Houdini version(s)."
         echo "================================================================="
         exit 0
     elif [ "$USER_CHOICE" = "3" ]; then
@@ -116,7 +116,7 @@ done
 echo ""
 echo "================================================================="
 if [ $COUNT -gt 0 ]; then
-    echo "🎉 DomeBreaker successfully installed into ${COUNT} Houdini version(s)!"
+    echo "[SUCCESS] DomeBreaker successfully installed into ${COUNT} Houdini version(s)!"
     echo "================================================================="
     echo "Next Steps:"
     echo "1. Launch Houdini."

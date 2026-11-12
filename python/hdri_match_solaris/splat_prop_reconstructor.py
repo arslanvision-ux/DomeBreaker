@@ -443,7 +443,8 @@ def reconstruct_heightfield_prop(
 
     # Determine default output path
     if not output_path:
-        out_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/props"
+        from hdri_match_solaris.usd_helpers import resolve_workspace_dir
+        out_dir = resolve_workspace_dir("scenes/props")
         output_path = os.path.join(out_dir, "prop_heightfield.usdc").replace("\\", "/")
 
     # Ensure .usdc extension for USD compatibility (Solaris references require USD format)
@@ -499,7 +500,8 @@ def reconstruct_vdb_prop(
 
     # Determine default output path
     if not output_path:
-        out_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/props"
+        from hdri_match_solaris.usd_helpers import resolve_workspace_dir
+        out_dir = resolve_workspace_dir("scenes/props")
         output_path = os.path.join(out_dir, "prop_vdb.usdc").replace("\\", "/")
 
     # Ensure .usdc extension for USD compatibility (Solaris references require USD format)
@@ -658,11 +660,8 @@ def reconstruct_prop_cluster(
         return None
 
     if not output_dir:
-        output_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/props"
-        if "hou" in sys.modules and hou and hasattr(hou, "expandString"):
-            hip = hou.expandString("$HIP")
-            if hip and hip != "." and "houdini_temp" not in hip:
-                output_dir = os.path.join(hip, "scenes", "props").replace("\\", "/")
+        from hdri_match_solaris.usd_helpers import resolve_workspace_dir
+        output_dir = resolve_workspace_dir("scenes/props")
 
     os.makedirs(output_dir, exist_ok=True)
     p_name = prop.get("name", "prop")

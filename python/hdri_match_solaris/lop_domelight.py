@@ -33,14 +33,15 @@ def cook(node):
     # ------------------------------------------------------------------
     # Read parameters
     # ------------------------------------------------------------------
-    hdri_path = hou.expandString(node.parm("hdri_path").eval()) if node.parm("hdri_path") else ""
-    dome_prim_path = node.parm("dome_path").eval() if node.parm("dome_path") else "/lights/hdri_dome"
-    exposure = node.parm("exposure").eval() if node.parm("exposure") else 0.0
-    yaw = node.parm("yaw").eval() if node.parm("yaw") else 0.0
-    color_r = node.parm("colorr").eval() if node.parm("colorr") else 1.0
-    color_g = node.parm("colorg").eval() if node.parm("colorg") else 1.0
-    color_b = node.parm("colorb").eval() if node.parm("colorb") else 1.0
-    texture_format = node.parm("texture_format").eval() if node.parm("texture_format") else "latlong"
+    raw_hdri = node.parm("hdri_path").eval() if node.parm("hdri_path") else ""
+    hdri_path = hou.expandString(str(raw_hdri or ""))
+    dome_prim_path = (node.parm("dome_path").eval() if node.parm("dome_path") else "") or "/lights/hdri_dome"
+    exposure = float(node.parm("exposure").eval()) if node.parm("exposure") else 0.0
+    yaw = float(node.parm("yaw").eval()) if node.parm("yaw") else 0.0
+    color_r = float(node.parm("colorr").eval()) if node.parm("colorr") else 1.0
+    color_g = float(node.parm("colorg").eval()) if node.parm("colorg") else 1.0
+    color_b = float(node.parm("colorb").eval()) if node.parm("colorb") else 1.0
+    texture_format = (node.parm("texture_format").eval() if node.parm("texture_format") else "") or "latlong"
 
     # ------------------------------------------------------------------
     # Try to inherit from upstream calibration node
@@ -77,4 +78,4 @@ def cook(node):
 
     print(f"[HDRI Match Solaris] DomeLight updated at {dome_prim_path}")
     print(f"  Texture: {hdri_path}")
-    print(f"  Exposure: {exposure:.2f} EV  |  Yaw: {yaw:.1f} deg")
+    print(f"  Exposure: {exposure:.2f} EV  |  Yaw: {yaw:.1f} deg")

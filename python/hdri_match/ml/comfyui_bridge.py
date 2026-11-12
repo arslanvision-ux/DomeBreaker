@@ -1,11 +1,109 @@
+import io
 import json
+import sys
 import urllib.request
 import urllib.parse
 import numpy as np
 import os
 
-# Enable OpenEXR support in OpenCV (Required for cv2.imdecode with EXR)
+# Enable OpenEXR support in OpenCV when used outside Houdini
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
+
+
+def _safe_get_cv2():
+    """Return cv2 only outside Houdini to prevent Qt/X11/OpenCL ABI conflicts."""
+    if "hou" in sys.modules:
+        return None
+    try:
+        import cv2
+        return cv2
+    except ImportError:
+        return None
+
+
+def _resize_bilinear_np(img: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
+    """Resize 2D or 3D NumPy array cleanly without cv2."""
+    cv2 = _safe_get_cv2()
+    if cv2 is not None:
+        interp = cv2.INTER_AREA if (target_w < img.shape[1] or target_h < img.shape[0]) else cv2.INTER_LINEAR
+        return cv2.resize(img, (target_w, target_h), interpolation=interp)
+
+    h, w = img.shape[:2]
+    if h == target_h and w == target_w:
+        return img.copy()
+    y = np.linspace(0.0, max(h - 1, 0), target_h, dtype=np.float32)
+    x = np.linspace(0.0, max(w - 1, 0), target_w, dtype=np.float32)
+    y0 = np.floor(y).astype(np.int32)
+    x0 = np.floor(x).astype(np.int32)
+    y1 = np.minimum(y0 + 1, h - 1)
+    x1 = np.minimum(x0 + 1, w - 1)
+    wy = (y - y0)[:, None]
+    wx = (x - x0)[None, :]
+    if img.ndim == 3:
+        wy = wy[..., None]
+        wx = wx[..., None]
+    out = (
+        img[y0[:, None], x0[None, :]] * (1.0 - wy) * (1.0 - wx)
+        + img[y0[:, None], x1[None, :]] * (1.0 - wy) * wx
+        + img[y1[:, None], x0[None, :]] * wy * (1.0 - wx)
+        + img[y1[:, None], x1[None, :]] * wy * wx
+    )
+    return out.astype(img.dtype if np.issubdtype(img.dtype, np.floating) else np.float32)
+
+
+def _encode_png_bytes(arr_u8: np.ndarray) -> bytes:
+    """Encode a uint8 RGB or grayscale array to PNG bytes without requiring cv2 inside Houdini."""
+    try:
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.fromarray(np.ascontiguousarray(arr_u8)).save(buf, format="PNG")
+        return buf.getvalue()
+    except ImportError:
+        pass
+
+    cv2 = _safe_get_cv2()
+    if cv2 is not None:
+        src = cv2.cvtColor(arr_u8, cv2.COLOR_RGB2BGR) if (arr_u8.ndim == 3 and arr_u8.shape[2] == 3) else arr_u8
+        ok, encoded = cv2.imencode('.png', src)
+        if ok:
+            return encoded.tobytes()
+
+    raise RuntimeError("No PNG encoder available (install Pillow outside Houdini or enable PIL).")
+
+
+def _decode_image_bytes_to_linear(img_bytes: bytes):
+    """Decode downloaded image bytes into scene-linear float32 RGB/RGBA without cv2 inside Houdini."""
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(img_bytes)) as im:
+            if im.mode not in ("RGB", "RGBA"):
+                im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
+            arr = np.asarray(im, dtype=np.float32) / 255.0
+            if arr.ndim == 3 and arr.shape[-1] == 4:
+                return np.concatenate([arr[..., :3] ** 2.2, arr[..., 3:4]], axis=-1)
+            return arr ** 2.2
+    except Exception:
+        pass
+
+    cv2 = _safe_get_cv2()
+    if cv2 is not None:
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img_out = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
+        if img_out is not None:
+            is_hdr = img_out.dtype in [np.float32, np.float16, np.float64]
+            if img_out.ndim == 3 and img_out.shape[-1] == 4:
+                rgba_out = cv2.cvtColor(img_out, cv2.COLOR_BGRA2RGBA)
+                if not is_hdr:
+                    rgba_out = rgba_out.astype(np.float32) / 255.0
+                    return np.concatenate([rgba_out[..., :3] ** 2.2, rgba_out[..., 3:4]], axis=-1)
+                return rgba_out.astype(np.float32)
+            rgb_out = cv2.cvtColor(img_out, cv2.COLOR_BGR2RGB)
+            if not is_hdr:
+                rgb_out = rgb_out.astype(np.float32) / 255.0
+                return rgb_out ** 2.2
+            return rgb_out.astype(np.float32)
+
+    return None
 
 class ComfyUIBridge:
     def __init__(self, api_url="http://127.0.0.1:8188", backend="ComfyUI (Local)"):
@@ -40,7 +138,6 @@ class ComfyUIBridge:
             
             # --- Dynamic Resolution Scaling ---
             import math
-            import cv2
             orig_h, orig_w = hdri_array.shape[:2]
             max_area = 1024 * 1024
             
@@ -57,20 +154,19 @@ class ComfyUIBridge:
                 target_h = (int(orig_h * scale) // 8) * 8
                 
                 if target_w >= 64 and target_h >= 64:
-                    scaled_hdri = cv2.resize(hdri_array, (target_w, target_h), interpolation=cv2.INTER_AREA)
-                    scaled_mask = cv2.resize(mask_array, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                    scaled_hdri = _resize_bilinear_np(hdri_array, target_w, target_h)
+                    scaled_mask = _resize_bilinear_np(mask_array, target_w, target_h)
                     print(f"[{self.backend}] Downscaled input from {orig_w}x{orig_h} to {target_w}x{target_h} to maintain relative scale.")
             
             
             # --- API Specific Implementations ---
             if "HuggingFace" in self.backend:
-                import cv2
                 import base64
                 
                 img_u8 = (np.clip(scaled_hdri, 0, 1) * 255).astype(np.uint8)
                 mask_u8 = (np.clip(scaled_mask, 0, 1) * 255).astype(np.uint8)
-                _, img_png = cv2.imencode('.png', cv2.cvtColor(img_u8, cv2.COLOR_RGB2BGR))
-                _, mask_png = cv2.imencode('.png', mask_u8)
+                img_png = _encode_png_bytes(img_u8)
+                mask_png = _encode_png_bytes(mask_u8)
                 
                 payload = {
                     "inputs": prompt,
@@ -90,11 +186,10 @@ class ComfyUIBridge:
                         content_type = response.info().get('Content-Type', '')
                         if 'image' in content_type:
                             img_data = response.read()
-                            nparr = np.frombuffer(img_data, np.uint8)
-                            img_out = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                            img_out = _decode_image_bytes_to_linear(img_data)
                             if img_out is not None:
                                 print(f"[{self.backend}] Inference successful!")
-                                return cv2.cvtColor(img_out, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0, None
+                                return np.power(np.clip(img_out[..., :3], 0.0, 1.0), 1.0 / 2.2), None
                         else:
                             resp_json = json.loads(response.read())
                             print(f"[{self.backend}] API returned JSON instead of image: {resp_json}")
@@ -108,15 +203,14 @@ class ComfyUIBridge:
                     return hdri_array.copy(), f"HuggingFace API Request Failed:\n{e}"
                 
             elif "Banana.dev" in self.backend:
-                import cv2
                 import base64
                 
                 # 1. Convert to sRGB and base64
                 srgb_array = np.clip(scaled_hdri, 0, 1) ** (1.0 / 2.2)
                 img_u8 = (srgb_array * 255).astype(np.uint8)
                 mask_u8 = (np.clip(scaled_mask, 0, 1) * 255).astype(np.uint8)
-                _, img_png = cv2.imencode('.png', cv2.cvtColor(img_u8, cv2.COLOR_RGB2BGR))
-                _, mask_png = cv2.imencode('.png', mask_u8)
+                img_png = _encode_png_bytes(img_u8)
+                mask_png = _encode_png_bytes(mask_u8)
                 
                 img_b64 = base64.b64encode(img_png).decode('utf-8')
                 mask_b64 = base64.b64encode(mask_png).decode('utf-8')
@@ -147,18 +241,11 @@ class ComfyUIBridge:
                             output_b64 = res_json["modelOutputs"][0].get("imageBase64", "")
                             if output_b64:
                                 img_data = base64.b64decode(output_b64)
-                                nparr = np.frombuffer(img_data, np.uint8)
-                                img_out = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
-                                if img_out is not None:
-                                    if img_out.ndim == 3 and img_out.shape[-1] == 4:
-                                        rgba_out = cv2.cvtColor(img_out, cv2.COLOR_BGRA2RGBA).astype(np.float32) / 255.0
-                                        linear_out = np.concatenate([rgba_out[..., :3] ** 2.2, rgba_out[..., 3:4]], axis=-1)
-                                    else:
-                                        rgb_out = cv2.cvtColor(img_out, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-                                        linear_out = rgb_out ** 2.2
+                                linear_out = _decode_image_bytes_to_linear(img_data)
+                                if linear_out is not None:
                                     req_h, req_w = hdri_array.shape[:2]
                                     if linear_out.shape[:2] != (req_h, req_w):
-                                        linear_out = cv2.resize(linear_out, (req_w, req_h), interpolation=cv2.INTER_LANCZOS4)
+                                        linear_out = _resize_bilinear_np(linear_out, req_w, req_h)
                                     return linear_out, None
                         return hdri_array.copy(), "Banana API returned empty output."
                 except urllib.error.HTTPError as e:
@@ -172,8 +259,6 @@ class ComfyUIBridge:
                 return hdri_array.copy(), "OpenAI API not yet implemented."
             else:
                 # --- Actual Local ComfyUI Workflow ---
-                import cv2
-                
                 # 0. Ping the server to see if it's alive
                 if not self.api_url.startswith("http"):
                     return hdri_array.copy(), "Invalid ComfyUI URL. Must start with http:// or https://"
@@ -183,12 +268,12 @@ class ComfyUIBridge:
                 srgb_array = np.clip(scaled_hdri, 0, 1) ** (1.0 / 2.2)
                 img_u8 = (srgb_array * 255).astype(np.uint8)
                 mask_u8 = (np.clip(scaled_mask, 0, 1) * 255).astype(np.uint8)
-                _, img_png = cv2.imencode('.png', cv2.cvtColor(img_u8, cv2.COLOR_RGB2BGR))
-                _, mask_png = cv2.imencode('.png', mask_u8)
+                img_png = _encode_png_bytes(img_u8)
+                mask_png = _encode_png_bytes(mask_u8)
                 
                 # 2. Upload to ComfyUI
-                img_filename = self._upload_image(img_png.tobytes(), "hdri_inpaint_target.png")
-                mask_filename = self._upload_image(mask_png.tobytes(), "hdri_inpaint_mask.png")
+                img_filename = self._upload_image(img_png, "hdri_inpaint_target.png")
+                mask_filename = self._upload_image(mask_png, "hdri_inpaint_mask.png")
                 
                 if img_filename and mask_filename:
                     print(f"[{self.backend}] Uploaded {img_filename} and {mask_filename}")
@@ -265,31 +350,12 @@ class ComfyUIBridge:
                                         req_view = urllib.request.Request(view_url)
                                         with urllib.request.urlopen(req_view) as res_view:
                                             img_data = res_view.read()
-                                            nparr = np.frombuffer(img_data, np.uint8)
-                                            img_out = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
-                                            if img_out is not None:
-                                                is_hdr = img_out.dtype in [np.float32, np.float16, np.float64]
-                                                if img_out.ndim == 3 and img_out.shape[-1] == 4:
-                                                    rgba_out = cv2.cvtColor(img_out, cv2.COLOR_BGRA2RGBA)
-                                                    if not is_hdr:
-                                                        rgba_out = rgba_out.astype(np.float32) / 255.0
-                                                        linear_out = np.concatenate([rgba_out[..., :3] ** 2.2, rgba_out[..., 3:4]], axis=-1)
-                                                    else:
-                                                        linear_out = rgba_out.astype(np.float32)
-                                                else:
-                                                    # Convert BGR to RGB, normalize, and convert sRGB back to Linear
-                                                    rgb_out = cv2.cvtColor(img_out, cv2.COLOR_BGR2RGB)
-                                                    if not is_hdr:
-                                                        rgb_out = rgb_out.astype(np.float32) / 255.0
-                                                        linear_out = rgb_out ** 2.2
-                                                    else:
-                                                        linear_out = rgb_out.astype(np.float32)
-                                                
+                                            linear_out = _decode_image_bytes_to_linear(img_data)
+                                            if linear_out is not None:
                                                 # Ensure exact dimension match (ComfyUI rounds to nearest 8 pixels)
                                                 req_h, req_w = hdri_array.shape[:2]
                                                 if linear_out.shape[:2] != (req_h, req_w):
-                                                    linear_out = cv2.resize(linear_out, (req_w, req_h), interpolation=cv2.INTER_LANCZOS4)
-                                                    
+                                                    linear_out = _resize_bilinear_np(linear_out, req_w, req_h)
                                                 return linear_out, None
                                     
                                     # If we reached here, the job finished but SaveImage failed (e.g. out of memory or missing node)
@@ -316,24 +382,42 @@ class ComfyUIBridge:
             
     def _simulate_inpainting(self, hdri_array, mask_array):
         # Simulate AI replacing the masked area with a smooth blur (like an empty sky)
-        try:
-            import cv2
-            out = hdri_array.copy()
-            mask_u8 = (mask_array * 255).astype(np.uint8)
-            # Simple Navier-Stokes inpainting as a lightweight local proxy for AI
-            out_u8 = (np.clip(out, 0, 1) * 255).astype(np.uint8)
-            inpainted = cv2.inpaint(out_u8, mask_u8, 3, cv2.INPAINT_NS)
-            inpainted_float = inpainted.astype(np.float32) / 255.0
-            
-            # Blend it back (only over the masked area)
-            blend_mask = np.clip(mask_array, 0, 1)
-            if blend_mask.ndim == 2:
-                blend_mask = blend_mask[..., np.newaxis]
-                
-            out = out * (1.0 - blend_mask) + inpainted_float * blend_mask
+        cv2 = _safe_get_cv2()
+        if cv2 is not None:
+            try:
+                out = hdri_array.copy()
+                mask_u8 = (mask_array * 255).astype(np.uint8)
+                # Simple Navier-Stokes inpainting as a lightweight local proxy for AI
+                out_u8 = (np.clip(out, 0, 1) * 255).astype(np.uint8)
+                inpainted = cv2.inpaint(out_u8, mask_u8, 3, cv2.INPAINT_NS)
+                inpainted_float = inpainted.astype(np.float32) / 255.0
+
+                # Blend it back (only over the masked area)
+                blend_mask = np.clip(mask_array, 0, 1)
+                if blend_mask.ndim == 2:
+                    blend_mask = blend_mask[..., np.newaxis]
+
+                return out * (1.0 - blend_mask) + inpainted_float * blend_mask
+            except Exception:
+                pass
+
+        # Pure-NumPy neighbor diffusion fallback (no cv2 / safe inside Houdini)
+        out = hdri_array.astype(np.float32, copy=True)
+        m = mask_array[..., 0] if mask_array.ndim == 3 else mask_array
+        m_bool = m > 0.1
+        if not np.any(m_bool) or np.all(m_bool):
             return out
-        except ImportError:
-            return hdri_array.copy()
+        work = out.copy()
+        for _ in range(8):
+            nbr = 0.25 * (
+                np.roll(work, 1, axis=0)
+                + np.roll(work, -1, axis=0)
+                + np.roll(work, 1, axis=1)
+                + np.roll(work, -1, axis=1)
+            )
+            work[m_bool] = nbr[m_bool]
+        blend_mask = np.clip(m, 0.0, 1.0)[..., np.newaxis]
+        return out * (1.0 - blend_mask) + work * blend_mask
 
     def _upload_image(self, image_bytes, filename):
         boundary = 'wL36Yn8afVp8Ag7AmP8qZ0SA4n1v9T'

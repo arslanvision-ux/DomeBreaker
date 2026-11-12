@@ -6,6 +6,7 @@ Manages JSON-based light presets, rig presets, and the asset library
 directories (HDRIs, Gobos, Scrims). Supports audition-on-hover.
 """
 
+import copy
 import json
 import logging
 import os
@@ -42,7 +43,7 @@ GOBO_DIR = os.environ.get("CRUCIBLE_GOBO_PATH",
 SCRIM_DIR = os.environ.get("CRUCIBLE_SCRIM_PATH",
                             _cfg.get("SCRIM_DIR", os.path.join(_DEFAULT_ROOT, "scrims")))
 RIG_DIR = os.environ.get("CRUCIBLE_RIG_PATH",
-                          os.path.join(_DEFAULT_ROOT, "light_rigs"))
+                         _cfg.get("RIG_DIR", os.path.join(_DEFAULT_ROOT, "light_rigs")))
 
 def set_hdri_dir(path):
     global HDRI_DIR
@@ -276,7 +277,7 @@ LIGHT_PRESETS = {
 
 def get_light_presets():
     """Return built-in presets and user JSON presets as a nested dict."""
-    presets = {"Built-in": dict(LIGHT_PRESETS)}
+    presets = {"Built-in": copy.deepcopy(LIGHT_PRESETS)}
 
     # Recursively load user presets from rig directory
     if os.path.exists(RIG_DIR):

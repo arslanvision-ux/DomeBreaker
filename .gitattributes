@@ -1,0 +1,13 @@
+* text=auto
+*.sh text eol=lf
+*.py text
+*.shelf text
+*.pypanel text
+*.json text
+*.md text
+*.exr binary
+*.hdr binary
+*.png binary
+*.jpg binary
+*.hda binary
+*.hip binary

@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
 """
-SPLATFORGE — Gaussian Splat → VFX-Ready Reconstructed Environment
+SPLATFORGE - Gaussian Splat -> VFX-Ready Reconstructed Environment
 
 Converts a Gaussian Splatting capture of a real environment into a usable
 VFX scene consisting of reconstructed room geometry, reconstructed props,
@@ -16,17 +15,19 @@ __houdini_min__ = "20.5"
 
 import sys
 import importlib
+import importlib.util
 
 # ---------------------------------------------------------------------------
-# Feature detection — optional dependencies
+# Feature detection - optional dependencies
 # ---------------------------------------------------------------------------
 
 def _check_module(name):
-    """Check if a Python module is importable without side effects."""
+    """Check if a Python module is importable without importing it at startup."""
+    if name == "cv2" and "hou" in sys.modules:
+        return False
     try:
-        importlib.import_module(name)
-        return True
-    except ImportError:
+        return importlib.util.find_spec(name) is not None
+    except Exception:
         return False
 
 
@@ -55,6 +56,6 @@ def print_feature_summary():
     features = feature_summary()
     print("\n=== SPLATFORGE Feature Summary ===")
     for key, val in features.items():
-        status = "✓" if val is True else ("✗" if val is False else val)
+        status = "OK" if val is True else ("--" if val is False else val)
         print(f"  {key:30s} {status}")
     print("=" * 38 + "\n")

@@ -1,13 +1,19 @@
+import sys
 import numpy as np
-try:
-    import cv2
-    HAS_CV2 = True
-except ImportError:
+
+if "hou" in sys.modules:
     HAS_CV2 = False
+else:
+    try:
+        import cv2
+        HAS_CV2 = True
+    except ImportError:
+        HAS_CV2 = False
 
 def _bilinear_remap(img, u, v, mode='wrap'):
-    """Bilinear remap in pure numpy or OpenCV if available."""
-    if HAS_CV2:
+    """Bilinear remap in pure numpy or OpenCV if safely outside Houdini."""
+    if HAS_CV2 and "hou" not in sys.modules:
+        import cv2
         border_mode = cv2.BORDER_WRAP if mode == 'wrap' else cv2.BORDER_TRANSPARENT
         return cv2.remap(
             img.astype(np.float32),
@@ -118,7 +124,7 @@ class SphericalProjector:
         equi_u = (lon / (2 * np.pi) + 0.5) * W
         equi_v = (0.5 - lat / np.pi) * H
         
-        rect_img = cv2.remap(equi_img, equi_u.astype(np.float32), equi_v.astype(np.float32), interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
+        rect_img = _bilinear_remap(equi_img, equi_u.astype(np.float32), equi_v.astype(np.float32), mode='wrap')
         return rect_img
 
     @staticmethod

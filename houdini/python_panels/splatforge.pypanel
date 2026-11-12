@@ -7,10 +7,8 @@ def _build_panel():
     try:
         import hou
         def _get_stage():
-            stage = hou.node("/stage")
-            if stage is None:
-                stage = hou.node("/obj").createNode("lopnet", "stage")
-            return stage
+            from hdri_match_solaris.usd_helpers import get_or_create_solaris_stage_node
+            return get_or_create_solaris_stage_node(create=True)
 
         from hdri_match_solaris.splatforge.ui.splatforge_tab import SplatForgeTab
         return SplatForgeTab(stage_node_getter=_get_stage)

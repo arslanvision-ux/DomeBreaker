@@ -1,44 +1,79 @@
-import numpy as np
-import os
 import json
+import os
+import sys
+import numpy as np
 
-# Must be set before cv2 is first imported — OpenCV reads this at import time
-# on some platforms. Setting it inside a function body (after import) is too late.
+# Must be set before cv2 is first imported outside Houdini
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 
 
 def save_numpy_to_image(image_array: np.ndarray, file_path: str):
-    """Saves a NumPy float32 RGB array to an EXR or HDR file."""
-    if image_array.ndim < 3:
-        raise ValueError("Expected a 3-channel (H, W, 3) array.")
-    height, width, channels = image_array.shape
+    """Saves a NumPy float32 RGB array to an EXR or HDR file safely."""
+    arr = np.asarray(image_array, dtype=np.float32)
+    if arr.ndim == 2:
+        arr = np.stack([arr] * 3, axis=-1)
+    elif arr.ndim != 3:
+        raise ValueError("Expected a 2D or 3D image array.")
 
-    if channels != 3:
+    if arr.shape[2] >= 3:
+        arr = arr[..., :3]
+    else:
         raise ValueError("Only 3-channel RGB arrays are currently supported for export.")
+
+    height, width, _ = arr.shape
+    clean_img = np.nan_to_num(arr, nan=0.0, posinf=65504.0, neginf=0.0)
+    contiguous_img = np.ascontiguousarray(clean_img, dtype=np.float32)
+
+    out_dir = os.path.dirname(os.path.abspath(file_path))
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
 
     ext = os.path.splitext(file_path)[1].lower()
 
+    # 1. Prefer OpenImageIO inside and outside Houdini (fail-closed)
     try:
-        import cv2
-        contiguous_img = np.ascontiguousarray(image_array, dtype=np.float32)
-        bgr = cv2.cvtColor(contiguous_img, cv2.COLOR_RGB2BGR)
-        success = cv2.imwrite(file_path, bgr)
-        if success:
-            print(f"Saved {ext} successfully via OpenCV to: {file_path}")
+        import OpenImageIO as oiio
+        spec = oiio.ImageSpec(width, height, 3, oiio.FLOAT)
+        out = oiio.ImageOutput.create(file_path)
+        if not out:
+            raise IOError(f"OpenImageIO could not create output: {oiio.geterror()}")
+        opened = False
+        try:
+            opened = bool(out.open(file_path, spec))
+            if not opened:
+                raise IOError(f"OpenImageIO open() failed: {out.geterror() if hasattr(out, 'geterror') else oiio.geterror()}")
+            if not bool(out.write_image(contiguous_img)):
+                raise IOError(f"OpenImageIO write_image() failed: {out.geterror() if hasattr(out, 'geterror') else oiio.geterror()}")
+            print(f"Saved {ext} successfully via OpenImageIO to: {file_path}")
             return
+        finally:
+            if opened:
+                out.close()
     except Exception as e:
-        print(f"OpenCV export failed: {e}")
-        
+        print(f"OpenImageIO export failed: {e}")
+
+    # 2. Only permit OpenCV outside Houdini
+    if "hou" not in sys.modules:
+        try:
+            import cv2
+            bgr = cv2.cvtColor(contiguous_img, cv2.COLOR_RGB2BGR)
+            success = cv2.imwrite(file_path, bgr)
+            if success:
+                print(f"Saved {ext} successfully via OpenCV to: {file_path}")
+                return
+        except Exception as e:
+            print(f"OpenCV export failed: {e}")
+
+    # 3. Standalone ImageIO fallback
     try:
         import imageio.v3 as iio
-        contiguous_img = np.ascontiguousarray(image_array, dtype=np.float32)
         iio.imwrite(file_path, contiguous_img)
         print(f"Saved {ext} successfully via ImageIO to: {file_path}")
         return
     except Exception as e:
         print(f"ImageIO export failed: {e}")
-        
-    raise RuntimeError(f"Failed to save {ext}. Ensure opencv-python or imageio is installed properly.")
+
+    raise RuntimeError(f"Failed to save {ext}. Ensure OpenImageIO or imageio is available.")
 
 def export_cg_light_data(light_params: dict, export_path: str):
     # 1. Clean up Light names (Strip 'C_' prefix, lowercase) so they match Houdini nodes
@@ -152,9 +187,38 @@ def export_cg_light_data(light_params: dict, export_path: str):
         
     return export_path, solaris_script_path
 
+def _resize_bilinear_max_dim(img: np.ndarray, max_size: int = 128) -> np.ndarray:
+    """Resize (H, W, C) image down so max(H, W) <= max_size using pure NumPy."""
+    h, w = img.shape[:2]
+    max_dim = max(w, h)
+    if max_dim <= max_size or max_dim == 0:
+        return img
+    scale = float(max_size) / float(max_dim)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    y = np.linspace(0.0, max(h - 1, 0), new_h, dtype=np.float32)
+    x = np.linspace(0.0, max(w - 1, 0), new_w, dtype=np.float32)
+    y0 = np.floor(y).astype(np.int64)
+    x0 = np.floor(x).astype(np.int64)
+    y1 = np.clip(y0 + 1, 0, h - 1)
+    x1 = np.clip(x0 + 1, 0, w - 1)
+    wy = (y - y0)[:, None, None]
+    wx = (x - x0)[None, :, None]
+    ia = img[np.ix_(y0, x0)]
+    ib = img[np.ix_(y0, x1)]
+    ic = img[np.ix_(y1, x0)]
+    id_ = img[np.ix_(y1, x1)]
+    return (
+        ia * (1.0 - wx) * (1.0 - wy)
+        + ib * wx * (1.0 - wy)
+        + ic * (1.0 - wx) * wy
+        + id_ * wx * wy
+    ).astype(np.float32)
+
+
 def export_masks_as_solaris_lights(masks, hdri_array, export_dir):
     import math
-    import cv2
+    os.makedirs(export_dir, exist_ok=True)
     
     script_lines = [
         "import hou",
@@ -187,25 +251,15 @@ def export_masks_as_solaris_lights(masks, hdri_array, export_dir):
             continue
             
         roi = hdri_array[sy1:sy2, sx1:sx2].copy()
-        
-        # Resize to max 128
-        roi_h, roi_w = roi.shape[:2]
-        max_dim = max(roi_w, roi_h)
-        if max_dim > 128:
-            scale = 128.0 / max_dim
-            new_w, new_h = int(roi_w * scale), int(roi_h * scale)
-            roi = cv2.resize(roi, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        roi = _resize_bilinear_max_dim(roi, 128)
             
-        # Save texture
+        # Save texture via safe OpenImageIO / ImageIO path
         safe_name = "".join(c if c.isalnum() else "_" for c in mask.name)
         if not safe_name: safe_name = f"Mask_{i}"
         
         tex_filename = f"mask_{i}_{safe_name}_tex.exr"
         tex_path = os.path.join(export_dir, tex_filename)
-        
-        contiguous_roi = np.ascontiguousarray(roi, dtype=np.float32)
-        bgr = cv2.cvtColor(contiguous_roi, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(tex_path, bgr)
+        save_numpy_to_image(roi, tex_path)
         
         # Calculate 3D position
         theta = (cx * 2.0 * math.pi) - math.pi

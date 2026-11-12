@@ -6,7 +6,7 @@
 set -e
 
 echo "================================================================="
-echo "   🗑️  DomeBreaker - Solaris USD Suite Uninstaller (Linux)"
+echo "   [DomeBreaker] Solaris USD Suite Uninstaller (Linux)"
 echo "================================================================="
 echo ""
 
@@ -51,7 +51,7 @@ done
 echo ""
 echo "================================================================="
 if [ $REMOVED -gt 0 ]; then
-    echo "🎉 DomeBreaker uninstalled from ${REMOVED} location(s)."
+    echo "[SUCCESS] DomeBreaker uninstalled from ${REMOVED} location(s)."
 else
     echo "[INFO] No DomeBreaker package files found to remove."
 fi

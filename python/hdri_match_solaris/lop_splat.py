@@ -1334,7 +1334,10 @@ def spawn_portal_lights(
 
     if portal_texture_mode == "cropped" and orig_hdri and os.path.isfile(orig_hdri):
         try:
-            for p_cand in [os.environ.get("HDRI_MATCH_PLATE_ROOT", ""), "E:/PROJECTS/HDRI_Match_Plate", "e:/PROJECTS/HDRI_Match_Plate"]:
+            for p_cand in [
+                os.environ.get("HDRI_MATCH_PLATE_ROOT", ""),
+                os.path.join(os.environ.get("DOMEBREAKER_ROOT", ""), "python") if os.environ.get("DOMEBREAKER_ROOT") else "",
+            ]:
                 if p_cand and os.path.isdir(p_cand) and p_cand not in sys.path:
                     sys.path.insert(0, p_cand)
             from hdri_match.io.loader import load_exr_to_numpy
@@ -1743,7 +1746,10 @@ def build_usd_room_architecture(
             cand_albedo = f"{stem}_albedo{ext}"
             if not os.path.isfile(cand_albedo):
                 try:
-                    for p_cand in [os.environ.get("HDRI_MATCH_PLATE_ROOT", ""), "E:/PROJECTS/HDRI_Match_Plate", "e:/PROJECTS/HDRI_Match_Plate"]:
+                    for p_cand in [
+                        os.environ.get("HDRI_MATCH_PLATE_ROOT", ""),
+                        os.path.join(os.environ.get("DOMEBREAKER_ROOT", ""), "python") if os.environ.get("DOMEBREAKER_ROOT") else "",
+                    ]:
                         if p_cand and os.path.isdir(p_cand) and p_cand not in sys.path:
                             sys.path.insert(0, p_cand)
                     from hdri_match_solaris.gaussian_splat import GaussianSplatBaker
@@ -1768,7 +1774,7 @@ def build_usd_room_architecture(
         'import hou',
         'from pxr import Usd, UsdGeom, UsdShade, UsdLux, Gf, Vt, Sdf',
         '',
-        'for cand in [os.environ.get("HDRI_MATCH_PLATE_ROOT", ""), "E:/PROJECTS/HDRI_Match_Plate", "e:/PROJECTS/HDRI_Match_Plate", "E:/PROJECTS/HDRI_MATCH_SOLARIS/python", "e:/PROJECTS/HDRI_MATCH_SOLARIS/python"]:',
+        'for cand in [os.environ.get("HDRI_MATCH_PLATE_ROOT", ""), os.path.join(os.environ.get("DOMEBREAKER_ROOT", ""), "python") if os.environ.get("DOMEBREAKER_ROOT") else ""]:',
         '    if cand and os.path.isdir(cand) and cand not in sys.path:',
         '        sys.path.insert(0, cand)',
         'try:',

@@ -67,13 +67,10 @@ def assemble_splatforge_scene(
 
     # 1. Resolve /stage LOP network
     if stage_node is None:
-        stage_node = hou.node("/stage")
+        from hdri_match_solaris.usd_helpers import get_or_create_solaris_stage_node
+        stage_node = get_or_create_solaris_stage_node(create=True)
         if stage_node is None:
-            obj = hou.node("/obj")
-            if obj:
-                stage_node = obj.createNode("lopnet", "stage")
-            else:
-                raise RuntimeError("Could not find or create /stage LOP network.")
+            raise RuntimeError("Could not find or create /stage LOP network.")
 
     if progress_callback:
         progress_callback(10, "Preparing room reconstruction...")

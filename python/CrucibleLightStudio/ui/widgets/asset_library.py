@@ -21,15 +21,35 @@ from CrucibleLightStudio.core import preset_manager
 
 logger = logging.getLogger("CrucibleLightStudio.ui.asset_library")
 
+# Module-level registry keeping still-running cancelled workers alive until OS exit
+# so Qt never invokes QThread::~QThread() while a subprocess call is mid-flight.
+_ACTIVE_THUMBNAIL_WORKERS = set()
+
 
 class ThumbnailWorker(QtCore.QThread):
-    thumbnail_ready = QtCore.Signal(int, str)
-    
-    def __init__(self, assets, parent=None):
+    thumbnail_ready = QtCore.Signal(int, str, int)  # row_index, proxy_path, generation_id
+
+    def __init__(self, assets, generation_id=0, parent=None):
         super().__init__(parent)
         self.assets = assets
+        self.generation_id = int(generation_id)
         self.is_cancelled = False
-        
+
+    def cancel(self):
+        self.is_cancelled = True
+        try:
+            self.requestInterruption()
+        except Exception:
+            pass
+
+    def _should_stop(self):
+        if self.is_cancelled:
+            return True
+        try:
+            return bool(self.isInterruptionRequested())
+        except Exception:
+            return False
+
     def run(self):
         kwargs = {
             "stdout": subprocess.DEVNULL,
@@ -49,14 +69,14 @@ class ThumbnailWorker(QtCore.QThread):
         iconvert_bin = shutil.which("iconvert")
 
         for i, asset in self.assets:
-            if self.is_cancelled:
+            if self._should_stop():
                 break
             if asset.get("is_folder", False):
                 continue
             filepath = asset.get("path")
             if not filepath or not os.path.isfile(filepath):
                 continue
-            
+
             ext = os.path.splitext(filepath)[1].lower()
             if ext in {".exr", ".hdr", ".hdri", ".tx"}:
                 proxy_path = filepath + ".thumb.jpg"
@@ -69,7 +89,7 @@ class ThumbnailWorker(QtCore.QThread):
                                 check=False,
                                 **kwargs
                             ).returncode
-                        if ret != 0 and iconvert_bin:
+                        if not self._should_stop() and ret != 0 and iconvert_bin:
                             subprocess.run(
                                 [iconvert_bin, filepath, proxy_path],
                                 check=False,
@@ -77,16 +97,17 @@ class ThumbnailWorker(QtCore.QThread):
                             )
                     except Exception:
                         pass
-                if not self.is_cancelled and os.path.exists(proxy_path):
+                if not self._should_stop() and os.path.exists(proxy_path):
                     try:
-                        self.thumbnail_ready.emit(i, proxy_path)
+                        self.thumbnail_ready.emit(i, proxy_path, self.generation_id)
                     except Exception:
                         pass
             elif ext in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}:
-                try:
-                    self.thumbnail_ready.emit(i, filepath)
-                except Exception:
-                    pass
+                if not self._should_stop():
+                    try:
+                        self.thumbnail_ready.emit(i, filepath, self.generation_id)
+                    except Exception:
+                        pass
 
 class AssetGridWidget(QtWidgets.QListWidget):
     """
@@ -115,6 +136,8 @@ class AssetGridWidget(QtWidgets.QListWidget):
 
         self._assets = []
         self._last_hovered = None
+        self._worker = None
+        self._worker_gen = 0
 
         self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
@@ -153,22 +176,47 @@ class AssetGridWidget(QtWidgets.QListWidget):
                 drag.setHotSpot(QtCore.QPoint(40, 27))
         drag.exec_(QtCore.Qt.CopyAction)
 
-    def stop_worker(self):
-        if hasattr(self, '_worker') and self._worker is not None:
+    def _retire_worker(self, worker):
+        """Disconnect UI signals and keep running worker referenced until OS thread exits."""
+        if worker is None:
+            return
+        try:
+            worker.thumbnail_ready.disconnect(self._on_thumbnail_ready)
+        except Exception:
+            pass
+        worker.cancel()
+        if worker.isRunning():
+            _ACTIVE_THUMBNAIL_WORKERS.add(worker)
             try:
-                self._worker.is_cancelled = True
-                if self._worker.isRunning():
-                    self._worker.quit()
-                    self._worker.wait(200)
+                worker.quit()
+                worker.wait(50)
             except Exception:
                 pass
-            self._worker = None
+            if not worker.isRunning():
+                _ACTIVE_THUMBNAIL_WORKERS.discard(worker)
+                try:
+                    worker.deleteLater()
+                except Exception:
+                    pass
+        else:
+            _ACTIVE_THUMBNAIL_WORKERS.discard(worker)
+            try:
+                worker.deleteLater()
+            except Exception:
+                pass
+
+    def stop_worker(self):
+        self._worker_gen += 1
+        worker = getattr(self, '_worker', None)
+        self._worker = None
+        self._retire_worker(worker)
 
     def load_assets(self, asset_list):
         """Populate grid from a list of asset dicts asynchronously."""
         self.stop_worker()
         self.clear()
         self._assets = asset_list
+        current_gen = self._worker_gen
 
         worker_queue = []
         for i, asset in enumerate(asset_list):
@@ -191,13 +239,18 @@ class AssetGridWidget(QtWidgets.QListWidget):
                     item.setIcon(self._placeholder_icon(ext))
                     worker_queue.append((i, asset))
             self.addItem(item)
-            
-        if worker_queue:
-            self._worker = ThumbnailWorker(worker_queue, parent=None)
-            self._worker.thumbnail_ready.connect(self._on_thumbnail_ready)
-            self._worker.start()
 
-    def _on_thumbnail_ready(self, idx, filepath):
+        if worker_queue:
+            worker = ThumbnailWorker(worker_queue, generation_id=current_gen, parent=None)
+            _ACTIVE_THUMBNAIL_WORKERS.add(worker)
+            worker.finished.connect(lambda w=worker: (_ACTIVE_THUMBNAIL_WORKERS.discard(w), w.deleteLater()))
+            worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+            self._worker = worker
+            worker.start()
+
+    def _on_thumbnail_ready(self, idx, filepath, generation_id=None):
+        if generation_id is not None and generation_id != self._worker_gen:
+            return
         item = self.item(idx)
         if item:
             pixmap = QtGui.QPixmap(filepath)

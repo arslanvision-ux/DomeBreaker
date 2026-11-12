@@ -1,4 +1,5 @@
 import os
+import sys
 import numpy as np
 from hdri_match.core.data_models import ImageState
 from hdri_match.core.colorspace import ColorSpaceManager
@@ -6,6 +7,186 @@ from hdri_match.io.loader import load_exr_to_numpy
 from hdri_match.calibration.exposure import ExposureAnalyzer
 from hdri_match.calibration.white_balance import WhiteBalanceEstimator
 from hdri_match.calibration.sun_detection import SunDetector
+
+
+def _safe_get_cv2():
+    """Return cv2 only outside Houdini to prevent Qt/X11/OpenCL ABI conflicts."""
+    if "hou" in sys.modules:
+        return None
+    try:
+        import cv2
+        return cv2
+    except ImportError:
+        return None
+
+
+def _resize_bilinear_np(img: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
+    """Pure-NumPy bilinear resize supporting 2D or 3D arrays."""
+    h, w = img.shape[:2]
+    target_w = max(1, int(target_w))
+    target_h = max(1, int(target_h))
+    if (h, w) == (target_h, target_w):
+        return img.copy()
+
+    cv2 = _safe_get_cv2()
+    if cv2 is not None:
+        interp = cv2.INTER_AREA if (target_w < w or target_h < h) else cv2.INTER_LINEAR
+        return cv2.resize(img, (target_w, target_h), interpolation=interp)
+
+    y = np.linspace(0.0, max(h - 1, 0), target_h, dtype=np.float32)
+    x = np.linspace(0.0, max(w - 1, 0), target_w, dtype=np.float32)
+    y0 = np.floor(y).astype(np.int64)
+    x0 = np.floor(x).astype(np.int64)
+    y1 = np.clip(y0 + 1, 0, h - 1)
+    x1 = np.clip(x0 + 1, 0, w - 1)
+
+    if img.ndim == 2:
+        wy = (y - y0)[:, None]
+        wx = (x - x0)[None, :]
+        ia = img[np.ix_(y0, x0)].astype(np.float32)
+        ib = img[np.ix_(y0, x1)].astype(np.float32)
+        ic = img[np.ix_(y1, x0)].astype(np.float32)
+        id_ = img[np.ix_(y1, x1)].astype(np.float32)
+    else:
+        wy = (y - y0)[:, None, None]
+        wx = (x - x0)[None, :, None]
+        ia = img[np.ix_(y0, x0)].astype(np.float32)
+        ib = img[np.ix_(y0, x1)].astype(np.float32)
+        ic = img[np.ix_(y1, x0)].astype(np.float32)
+        id_ = img[np.ix_(y1, x1)].astype(np.float32)
+
+    out = ia * (1.0 - wx) * (1.0 - wy) + ib * wx * (1.0 - wy) + ic * (1.0 - wx) * wy + id_ * wx * wy
+    return out.astype(img.dtype if np.issubdtype(img.dtype, np.floating) else np.float32)
+
+
+def _load_decal_rgba_or_rgb(image_path: str) -> np.ndarray:
+    """Load decal image as normalized float32 RGBA/RGB in [0, 1] (or HDR float) without requiring cv2."""
+    if not image_path or not os.path.exists(image_path):
+        return None
+    try:
+        import OpenImageIO as oiio
+        inp = oiio.ImageInput.open(image_path)
+        if inp:
+            try:
+                arr = inp.read_image(format=oiio.FLOAT)
+            finally:
+                inp.close()
+            if arr is not None:
+                if arr.ndim == 2:
+                    arr = np.stack([arr] * 3, axis=-1)
+                elif arr.shape[2] > 4:
+                    arr = arr[..., :4]
+                return np.ascontiguousarray(arr, dtype=np.float32)
+    except Exception:
+        pass
+
+    try:
+        from PIL import Image
+        with Image.open(image_path) as im:
+            mode = "RGBA" if "A" in im.getbands() else "RGB"
+            return np.asarray(im.convert(mode), dtype=np.float32) / 255.0
+    except Exception:
+        pass
+
+    cv2 = _safe_get_cv2()
+    if cv2 is not None:
+        img = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
+        if img is not None:
+            if img.ndim == 3 and img.shape[2] == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+            elif img.ndim == 3 and img.shape[2] == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            if np.issubdtype(img.dtype, np.integer):
+                img = img.astype(np.float32) / 255.0
+            else:
+                img = img.astype(np.float32)
+            return img
+    return None
+
+
+def _rasterize_polygon_np(h: int, w: int, poly_pts: np.ndarray) -> np.ndarray:
+    """Scanline point-in-polygon rasterizer in pure NumPy."""
+    mask = np.zeros((h, w), dtype=bool)
+    if len(poly_pts) < 3:
+        return mask
+    xs = poly_pts[:, 0].astype(np.float32)
+    ys = poly_pts[:, 1].astype(np.float32)
+    n = len(poly_pts)
+    gx, gy = np.meshgrid(np.arange(w, dtype=np.float32) + 0.5, np.arange(h, dtype=np.float32) + 0.5)
+    inside = np.zeros((h, w), dtype=bool)
+    j = n - 1
+    for i in range(n):
+        yi, yj = ys[i], ys[j]
+        xi, xj = xs[i], xs[j]
+        cond = (yi > gy) != (yj > gy)
+        denom = (yj - yi) if abs(yj - yi) > 1e-8 else 1e-8
+        x_int = (xj - xi) * (gy - yi) / denom + xi
+        inside ^= cond & (gx < x_int)
+        j = i
+    return inside
+
+
+def _rasterize_polyline_dist_np(h: int, w: int, stroke_pts: np.ndarray) -> np.ndarray:
+    """Exact minimum Euclidean distance from pixel centers to a polyline in pure NumPy."""
+    if len(stroke_pts) == 0:
+        return np.full((h, w), 1e6, dtype=np.float32)
+    gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    min_d2 = np.full((h, w), 1e12, dtype=np.float32)
+    if len(stroke_pts) == 1:
+        px, py = float(stroke_pts[0, 0]), float(stroke_pts[0, 1])
+        return np.sqrt((gx - px) ** 2 + (gy - py) ** 2)
+    for k in range(len(stroke_pts) - 1):
+        ax, ay = float(stroke_pts[k, 0]), float(stroke_pts[k, 1])
+        bx, by = float(stroke_pts[k + 1, 0]), float(stroke_pts[k + 1, 1])
+        dx, dy = bx - ax, by - ay
+        len2 = dx * dx + dy * dy
+        if len2 < 1e-8:
+            d2 = (gx - ax) ** 2 + (gy - ay) ** 2
+        else:
+            t = np.clip(((gx - ax) * dx + (gy - ay) * dy) / len2, 0.0, 1.0)
+            proj_x = ax + t * dx
+            proj_y = ay + t * dy
+            d2 = (gx - proj_x) ** 2 + (gy - proj_y) ** 2
+        min_d2 = np.minimum(min_d2, d2)
+    return np.sqrt(min_d2)
+
+
+def _warp_affine_np(arr: np.ndarray, cx: float, cy: float, rot_deg: float, scale: float, ox: float, oy: float) -> np.ndarray:
+    """Pure-NumPy 2D affine transform (rotation+scale about (cx, cy) + translation (ox, oy))."""
+    h, w = arr.shape[:2]
+    scale = max(float(scale), 1e-5)
+    theta = np.deg2rad(-rot_deg)  # Match OpenCV positive CCW screen angle
+    cos_t = np.cos(theta)
+    sin_t = np.sin(theta)
+    gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    tx = gx - cx - ox
+    ty = gy - cy - oy
+    src_x = cx + (cos_t * tx + sin_t * ty) / scale
+    src_y = cy + (-sin_t * tx + cos_t * ty) / scale
+
+    valid = (src_x >= 0.0) & (src_x <= (w - 1)) & (src_y >= 0.0) & (src_y <= (h - 1))
+    sx = np.clip(src_x, 0.0, float(max(w - 1, 0)))
+    sy = np.clip(src_y, 0.0, float(max(h - 1, 0)))
+    x0 = np.floor(sx).astype(np.int64)
+    y0 = np.floor(sy).astype(np.int64)
+    x1 = np.clip(x0 + 1, 0, w - 1)
+    y1 = np.clip(y0 + 1, 0, h - 1)
+    wx = sx - x0
+    wy = sy - y0
+    if arr.ndim == 3:
+        wx = wx[..., None]
+        wy = wy[..., None]
+    out = (
+        arr[y0, x0] * (1.0 - wx) * (1.0 - wy)
+        + arr[y0, x1] * wx * (1.0 - wy)
+        + arr[y1, x0] * (1.0 - wx) * wy
+        + arr[y1, x1] * wx * wy
+    )
+    if arr.ndim == 3:
+        out = np.where(valid[..., None], out, 0.0)
+    else:
+        out = np.where(valid, out, 0.0)
+    return out.astype(arr.dtype)
 
 
 class CalibrationPipeline:
@@ -23,38 +204,22 @@ class CalibrationPipeline:
         if max(w, h) <= max_dim:
             return img.copy()
         scale = max_dim / max(w, h)
-        try:
-            import cv2
-            return cv2.resize(img, (int(w * scale), int(h * scale)),
-                              interpolation=cv2.INTER_AREA)
-        except ImportError:
-            try:
-                from scipy.ndimage import zoom
-                return zoom(img, (scale, scale, 1), order=1)
-            except ImportError:
-                import numpy as np
-                target_h, target_w = int(h * scale), int(w * scale)
-                y = np.linspace(0, h - 1, target_h).astype(int)
-                x = np.linspace(0, w - 1, target_w).astype(int)
-                if img.ndim == 3:
-                    return img[y, :][:, x, :]
-                else:
-                    return img[y, :][:, x]
+        return _resize_bilinear_np(img, max(1, int(w * scale)), max(1, int(h * scale)))
 
     def run_ai_inpaint(self, mask_layer):
         """Extracts the masked ROI, runs the ComfyUI inpainting API, and stores the patch."""
         if not mask_layer or not getattr(mask_layer, 'is_inpainted', False):
             return
-            
+
         from hdri_match.ml.comfyui_bridge import ComfyUIBridge
-        import cv2
-        
+        cv2 = _safe_get_cv2()
+
         arr = self.state.plate_proxy if getattr(mask_layer, 'target', 'HDRI') == 'Plate' else self.state.hdri_proxy
         if arr is None:
             arr = self.state.plate_array if getattr(mask_layer, 'target', 'HDRI') == 'Plate' else self.state.hdri_array
         if arr is None or mask_layer.rect is None:
             return
-            
+
         h, w = arr.shape[:2]
         nx1, ny1, nx2, ny2 = mask_layer.rect
         sx1, sx2 = nx1 * w, nx2 * w
@@ -64,82 +229,87 @@ class CalibrationPipeline:
             px1, px2 = 0, w
         else:
             px1, px2 = max(0, int(min(sx1, sx2))), min(w, int(max(sx1, sx2)))
-            
+
         py1, py2 = max(0, int(min(sy1, sy2))), min(h, int(max(sy1, sy2)))
-        
+
         if px2 - px1 < 2 or py2 - py1 < 2:
             return
-            
-        # Extract Region
+
         roi_img = arr[py1:py2, px1:px2].copy()
-        
-        # Build binary mask
-        roi_mask = np.zeros((py2-py1, px2-px1), dtype=np.float32)
+
+        roi_h, roi_w = py2 - py1, px2 - px1
+        roi_mask = np.zeros((roi_h, roi_w), dtype=np.float32)
         if mask_layer.shape in ["Polygon", "Lasso", "Brush"] and getattr(mask_layer, 'points', None):
             pts = []
             prev_x = None
-            for (nx, ny) in mask_layer.points:
+            for pt in mask_layer.points:
+                if pt is None:
+                    continue
+                nx, ny = pt
                 x = nx * w
                 if prev_x is not None and is_hdri:
                     if x - prev_x > w / 2: x -= w
                     elif prev_x - x > w / 2: x += w
                 pts.append([x - px1, (ny * h) - py1])
                 prev_x = x
-            poly_arr = np.array(pts, np.int32)
-            
-            if is_hdri:
-                poly_arr_left = poly_arr.copy(); poly_arr_left[:, 0] -= w
-                poly_arr_right = poly_arr.copy(); poly_arr_right[:, 0] += w
-                draw_polys = [poly_arr_left, poly_arr, poly_arr_right]
+            poly_arr = np.array(pts, np.float32)
+
+            if cv2 is not None:
+                poly_int = poly_arr.astype(np.int32)
+                if is_hdri:
+                    poly_arr_left = poly_int.copy(); poly_arr_left[:, 0] -= w
+                    poly_arr_right = poly_int.copy(); poly_arr_right[:, 0] += w
+                    draw_polys = [poly_arr_left, poly_int, poly_arr_right]
+                else:
+                    draw_polys = [poly_int]
+                roi_mask_u8 = np.zeros((roi_h, roi_w), dtype=np.uint8)
+                if mask_layer.shape == "Brush":
+                    cv2.polylines(roi_mask_u8, draw_polys, isClosed=False, color=1, thickness=int(mask_layer.brush_size), lineType=cv2.LINE_8)
+                else:
+                    cv2.fillPoly(roi_mask_u8, draw_polys, 1)
+                roi_mask = roi_mask_u8.astype(np.float32)
             else:
-                draw_polys = [poly_arr]
-                
-            roi_mask_u8 = np.zeros((py2-py1, px2-px1), dtype=np.uint8)
-            if mask_layer.shape == "Brush":
-                cv2.polylines(roi_mask_u8, draw_polys, isClosed=False, color=1, thickness=int(mask_layer.brush_size), lineType=cv2.LINE_8)
-            else:
-                cv2.fillPoly(roi_mask_u8, draw_polys, 1)
-            roi_mask = roi_mask_u8.astype(np.float32)
+                offsets = (-w, 0, w) if is_hdri else (0,)
+                if mask_layer.shape == "Brush":
+                    radius = max(1.0, float(mask_layer.brush_size) / 2.0)
+                    acc = np.zeros((roi_h, roi_w), dtype=bool)
+                    for ox_wrap in offsets:
+                        shifted = poly_arr.copy()
+                        shifted[:, 0] += ox_wrap
+                        acc |= (_rasterize_polyline_dist_np(roi_h, roi_w, shifted) <= radius)
+                    roi_mask = acc.astype(np.float32)
+                else:
+                    acc = np.zeros((roi_h, roi_w), dtype=bool)
+                    for ox_wrap in offsets:
+                        shifted = poly_arr.copy()
+                        shifted[:, 0] += ox_wrap
+                        acc |= _rasterize_polygon_np(roi_h, roi_w, shifted)
+                    roi_mask = acc.astype(np.float32)
         else:
             if is_hdri and sx1 > sx2:
-                # Mask crosses seam, only edges are masked
                 roi_mask[:, 0:int(sx2)] = 1.0
                 roi_mask[:, int(sx1):w] = 1.0
             else:
                 roi_mask.fill(1.0)
-                
-        # --- Advanced Keyer Stencil Integration ---
+
         if getattr(mask_layer, 'stencil_enable', False):
             stencil = self.calculate_stencil(roi_img, mask_layer)
             roi_mask = roi_mask * stencil
-            
+
         # --- Image Decal (Img2Img) Integration ---
         if mask_layer.shape == "Image" and getattr(mask_layer, 'image_path', ''):
-            import os
-            if os.path.exists(mask_layer.image_path):
-                img_decal = cv2.imread(mask_layer.image_path, cv2.IMREAD_UNCHANGED)
-                if img_decal is not None:
-                    if img_decal.ndim == 3:
-                        if img_decal.shape[2] == 4:
-                            img_decal = cv2.cvtColor(img_decal, cv2.COLOR_BGRA2RGBA)
-                        elif img_decal.shape[2] == 3:
-                            img_decal = cv2.cvtColor(img_decal, cv2.COLOR_BGR2RGB)
-                            
-                    ph, pw = py2 - py1, px2 - px1
-                    img_decal = cv2.resize(img_decal, (pw, ph), interpolation=cv2.INTER_AREA)
-                    # Convert to float linear
-                    img_decal_f = img_decal.astype(np.float32) / 255.0
-                    if img_decal_f.ndim == 3 and img_decal_f.shape[-1] == 4:
-                        alpha = img_decal_f[..., 3:4]
-                        rgb = img_decal_f[..., :3]
-                        # sRGB to linear approx for decal
-                        rgb = np.power(np.clip(rgb, 0, 1), 2.2)
-                        roi_img = roi_img * (1.0 - alpha) + rgb * alpha
-                        roi_mask = alpha[..., 0] # Make the mask tight around the decal alpha
-                    elif img_decal_f.ndim == 3 and img_decal_f.shape[-1] == 3:
-                        rgb = np.power(np.clip(img_decal_f, 0, 1), 2.2)
-                        roi_img = rgb
-                        roi_mask.fill(1.0)
+            img_decal_f = _load_decal_rgba_or_rgb(mask_layer.image_path)
+            if img_decal_f is not None:
+                img_decal_f = _resize_bilinear_np(img_decal_f, roi_w, roi_h)
+                if img_decal_f.ndim == 3 and img_decal_f.shape[-1] == 4:
+                    alpha = img_decal_f[..., 3:4]
+                    rgb = np.power(np.clip(img_decal_f[..., :3], 0, 1), 2.2)
+                    roi_img = roi_img * (1.0 - alpha) + rgb * alpha
+                    roi_mask = alpha[..., 0]
+                elif img_decal_f.ndim == 3 and img_decal_f.shape[-1] == 3:
+                    rgb = np.power(np.clip(img_decal_f, 0, 1), 2.2)
+                    roi_img = rgb
+                    roi_mask.fill(1.0)
             
         if is_hdri and getattr(mask_layer, 'spherical_projection', False):
             from hdri_match.core.projection import SphericalProjector
@@ -297,27 +467,30 @@ class CalibrationPipeline:
             feather = mask_layer.feather * scale_x
             
             if mask_layer.shape in ["Polygon", "Lasso", "Brush"] and getattr(mask_layer, 'points', None):
-                try:
-                    import cv2
-                    
-                    strokes = []
-                    current_stroke = []
-                    prev_x = None
-                    for pt in mask_layer.points:
-                        if pt is None:
-                            if current_stroke: strokes.append(current_stroke)
-                            current_stroke = []
-                            prev_x = None
-                        else:
-                            nx, ny = pt
-                            x = nx * w
-                            if prev_x is not None and getattr(mask_layer, 'target', 'HDRI') == 'HDRI':
-                                if x - prev_x > w / 2: x -= w
-                                elif prev_x - x > w / 2: x += w
-                            current_stroke.append([x, ny * h])
-                            prev_x = x
-                    if current_stroke: strokes.append(current_stroke)
-                    
+                strokes = []
+                current_stroke = []
+                prev_x = None
+                for pt in mask_layer.points:
+                    if pt is None:
+                        if current_stroke:
+                            strokes.append(current_stroke)
+                        current_stroke = []
+                        prev_x = None
+                    else:
+                        nx, ny = pt
+                        x = nx * w
+                        if prev_x is not None and getattr(mask_layer, 'target', 'HDRI') == 'HDRI':
+                            if x - prev_x > w / 2:
+                                x -= w
+                            elif prev_x - x > w / 2:
+                                x += w
+                        current_stroke.append([x, ny * h])
+                        prev_x = x
+                if current_stroke:
+                    strokes.append(current_stroke)
+
+                cv2 = _safe_get_cv2()
+                if cv2 is not None:
                     draw_polys = []
                     for stroke in strokes:
                         poly_arr = np.array(stroke, np.int32)
@@ -327,39 +500,62 @@ class CalibrationPipeline:
                             draw_polys.extend([poly_arr_left, poly_arr, poly_arr_right])
                         else:
                             draw_polys.append(poly_arr)
-                    
+
                     poly_mask = np.zeros((h, w), dtype=np.uint8)
-                    
                     if mask_layer.shape in ["Polygon", "Lasso"]:
                         cv2.fillPoly(poly_mask, draw_polys, 1)
-                        
                         if feather < 1.0:
                             mask[..., 0] = poly_mask.astype(np.float32)
                         else:
                             dist_in = cv2.distanceTransform(poly_mask, cv2.DIST_L2, 5)
                             dist_out = cv2.distanceTransform(1 - poly_mask, cv2.DIST_L2, 5)
-                            dist_combined = dist_out - dist_in
-                            
-                            val = 0.5 - (dist_combined / feather)
+                            val = 0.5 - ((dist_out - dist_in) / feather)
                             alpha = np.clip(val, 0.0, 1.0)
-                            alpha = alpha * alpha * (3.0 - 2.0 * alpha)
-                            mask[..., 0] = alpha
+                            mask[..., 0] = alpha * alpha * (3.0 - 2.0 * alpha)
                     else:
-                        # Brush: mathematically perfect euclidean capsule stroke
                         cv2.polylines(poly_mask, draw_polys, isClosed=False, color=1, thickness=1, lineType=cv2.LINE_8)
                         dist_out = cv2.distanceTransform(1 - poly_mask, cv2.DIST_L2, 5)
-                        
                         radius = (mask_layer.brush_size * scale_x) / 2.0
-                        # Base anti-aliasing + user feather
                         effective_feather = max(1.0, feather)
-                        
-                        dist_combined = dist_out - radius
-                        val = 0.5 - (dist_combined / effective_feather)
+                        val = 0.5 - ((dist_out - radius) / effective_feather)
                         alpha = np.clip(val, 0.0, 1.0)
-                        alpha = alpha * alpha * (3.0 - 2.0 * alpha)
-                        mask[..., 0] = alpha
-                except ImportError:
-                    pass
+                        mask[..., 0] = alpha * alpha * (3.0 - 2.0 * alpha)
+                else:
+                    # Pure-NumPy vector / brush mask rasterization inside Houdini
+                    offsets = (-w, 0, w) if getattr(mask_layer, 'target', 'HDRI') == 'HDRI' else (0,)
+                    if mask_layer.shape in ["Polygon", "Lasso"]:
+                        poly_bool = np.zeros((h, w), dtype=bool)
+                        for stroke in strokes:
+                            poly_arr = np.array(stroke, np.float32)
+                            for ox_wrap in offsets:
+                                shifted = poly_arr.copy()
+                                shifted[:, 0] += ox_wrap
+                                poly_bool |= _rasterize_polygon_np(h, w, shifted)
+                        if feather < 1.0:
+                            mask[..., 0] = poly_bool.astype(np.float32)
+                        else:
+                            try:
+                                from scipy.ndimage import distance_transform_edt
+                                dist_in = distance_transform_edt(poly_bool)
+                                dist_out = distance_transform_edt(~poly_bool)
+                                val = 0.5 - ((dist_out - dist_in) / feather)
+                                alpha = np.clip(val, 0.0, 1.0)
+                                mask[..., 0] = alpha * alpha * (3.0 - 2.0 * alpha)
+                            except ImportError:
+                                mask[..., 0] = poly_bool.astype(np.float32)
+                    else:
+                        dist_out = np.full((h, w), 1e6, dtype=np.float32)
+                        for stroke in strokes:
+                            poly_arr = np.array(stroke, np.float32)
+                            for ox_wrap in offsets:
+                                shifted = poly_arr.copy()
+                                shifted[:, 0] += ox_wrap
+                                dist_out = np.minimum(dist_out, _rasterize_polyline_dist_np(h, w, shifted))
+                        radius = (mask_layer.brush_size * scale_x) / 2.0
+                        effective_feather = max(1.0, feather)
+                        val = 0.5 - ((dist_out - radius) / effective_feather)
+                        alpha = np.clip(val, 0.0, 1.0)
+                        mask[..., 0] = alpha * alpha * (3.0 - 2.0 * alpha)
             else:
                 is_hdri = getattr(mask_layer, 'target', 'HDRI') == 'HDRI'
                 
@@ -409,13 +605,12 @@ class CalibrationPipeline:
                 patch = mask_layer.inpainted_patch
                 full_w = int(max(sx1, sx2)) - int(min(sx1, sx2))
                 full_h = int(max(sy1, sy2)) - int(min(sy1, sy2))
-                
+
                 if full_w > 0 and full_h > 0:
-                    import cv2
                     is_spherical = is_hdri and getattr(mask_layer, 'spherical_projection', False)
                     if not is_spherical and (patch.shape[1] != full_w or patch.shape[0] != full_h):
-                        patch = cv2.resize(patch, (full_w, full_h), interpolation=cv2.INTER_LINEAR)
-                        
+                        patch = _resize_bilinear_np(patch, full_w, full_h)
+
                     if getattr(mask_layer, 'inpaint_key_green', False):
                         r, g, b = patch[..., 0], patch[..., 1], patch[..., 2]
                         max_rb = np.maximum(r, b)
@@ -431,7 +626,7 @@ class CalibrationPipeline:
                     else:
                         if patch.ndim == 3 and patch.shape[-1] == 3:
                             patch = np.concatenate([patch, np.ones((patch.shape[0], patch.shape[1], 1), dtype=np.float32)], axis=-1)
-                            
+
                     decal = np.zeros((h, w, 4), dtype=np.float32)
                     up_px1 = max(0, int(min(sx1, sx2)))
                     up_px2 = min(w, int(max(sx1, sx2)))
@@ -439,12 +634,12 @@ class CalibrationPipeline:
                     up_py2 = min(h, int(max(sy1, sy2)))
                     target_w = up_px2 - up_px1
                     target_h = up_py2 - up_py1
-                    
+
                     crop_left = max(0, 0 - int(min(sx1, sx2)))
                     crop_top = max(0, 0 - int(min(sy1, sy2)))
                     crop_right = crop_left + target_w
                     crop_bottom = crop_top + target_h
-                    
+
                     if target_w > 0 and target_h > 0:
                         if is_hdri and getattr(mask_layer, 'spherical_projection', False):
                             from hdri_match.core.projection import SphericalProjector
@@ -462,20 +657,25 @@ class CalibrationPipeline:
                             decal[up_py1:up_py2, up_px1:up_px2] = patch[crop_top:crop_bottom, crop_left:crop_right]
 
             if is_transformed:
-                import cv2
                 cx = (sx1 + sx2) / 2.0
                 cy = (sy1 + sy2) / 2.0
-                M = cv2.getRotationMatrix2D((cx, cy), rot, scale)
-                M[0, 2] += ox * scale_x
-                M[1, 2] += oy * scale_x
-                
-                mask = cv2.warpAffine(mask, M, (w, h), flags=cv2.INTER_LINEAR)
-                if mask.ndim == 2:
-                    mask = mask[..., np.newaxis]
-                    
-                if decal is not None:
-                    decal = cv2.warpAffine(decal, M, (w, h), flags=cv2.INTER_LINEAR)
-                    
+                cv2 = _safe_get_cv2()
+                if cv2 is not None:
+                    M = cv2.getRotationMatrix2D((cx, cy), rot, scale)
+                    M[0, 2] += ox * scale_x
+                    M[1, 2] += oy * scale_x
+                    mask = cv2.warpAffine(mask, M, (w, h), flags=cv2.INTER_LINEAR)
+                    if mask.ndim == 2:
+                        mask = mask[..., np.newaxis]
+                    if decal is not None:
+                        decal = cv2.warpAffine(decal, M, (w, h), flags=cv2.INTER_LINEAR)
+                else:
+                    mask = _warp_affine_np(mask, cx, cy, rot, scale, ox * scale_x, oy * scale_x)
+                    if mask.ndim == 2:
+                        mask = mask[..., np.newaxis]
+                    if decal is not None:
+                        decal = _warp_affine_np(decal, cx, cy, rot, scale, ox * scale_x, oy * scale_x)
+
                 px1, px2, py1, py2 = 0, w, 0, h
             else:
                 pad = int(feather) + int(mask_layer.blur * scale_x) + 2
@@ -507,63 +707,53 @@ class CalibrationPipeline:
                 rgb = roi_decal[..., :3]
                 roi_graded = roi_graded * (1.0 - alpha) + rgb * alpha
             elif mask_layer.shape == "Image" and getattr(mask_layer, 'image_path', ''):
-                import os, cv2
-                if os.path.exists(mask_layer.image_path):
-                    img_decal = cv2.imread(mask_layer.image_path, cv2.IMREAD_UNCHANGED)
-                    if img_decal is not None:
-                        if img_decal.ndim == 3:
-                            if img_decal.shape[2] == 4:
-                                img_decal = cv2.cvtColor(img_decal, cv2.COLOR_BGRA2RGBA)
-                            elif img_decal.shape[2] == 3:
-                                img_decal = cv2.cvtColor(img_decal, cv2.COLOR_BGR2RGB)
-                                
-                        is_hdri = getattr(mask_layer, 'target', 'HDRI') == 'HDRI'
-                        if is_hdri and sx1 > sx2:
-                            up_px1, up_px2 = 0, w
-                        else:
-                            up_px1, up_px2 = max(0, int(min(sx1, sx2))), min(w, int(max(sx1, sx2)))
-                        up_py1, up_py2 = max(0, int(min(sy1, sy2))), min(h, int(max(sy1, sy2)))
-                        target_w = up_px2 - up_px1
-                        target_h = up_py2 - up_py1
-                        off_x = up_px1 - px1
-                        off_y = up_py1 - py1
-                        
-                        if target_w > 0 and target_h > 0 and off_x >= 0 and off_y >= 0:
-                            if is_hdri and getattr(mask_layer, 'spherical_projection', False):
-                                from hdri_match.core.projection import SphericalProjector
-                                if sx1 > sx2:
-                                    cx = (sx1 + sx2 + w) / 2.0
-                                    if cx >= w: cx -= w
-                                else:
-                                    cx = (sx1 + sx2) / 2.0
-                                cy = (sy1 + sy2) / 2.0
-                                patch_proj = SphericalProjector.rect_to_equi_roi(
-                                    img_decal, cx, cy, h, w, up_px1, up_px2, up_py1, up_py2
-                                )
-                                img_decal_f = patch_proj.astype(np.float32) / 255.0
+                img_decal_f = _load_decal_rgba_or_rgb(mask_layer.image_path)
+                if img_decal_f is not None:
+                    is_hdri = getattr(mask_layer, 'target', 'HDRI') == 'HDRI'
+                    if is_hdri and sx1 > sx2:
+                        up_px1, up_px2 = 0, w
+                    else:
+                        up_px1, up_px2 = max(0, int(min(sx1, sx2))), min(w, int(max(sx1, sx2)))
+                    up_py1, up_py2 = max(0, int(min(sy1, sy2))), min(h, int(max(sy1, sy2)))
+                    target_w = up_px2 - up_px1
+                    target_h = up_py2 - up_py1
+                    off_x = up_px1 - px1
+                    off_y = up_py1 - py1
+
+                    if target_w > 0 and target_h > 0 and off_x >= 0 and off_y >= 0:
+                        if is_hdri and getattr(mask_layer, 'spherical_projection', False):
+                            from hdri_match.core.projection import SphericalProjector
+                            if sx1 > sx2:
+                                cx = (sx1 + sx2 + w) / 2.0
+                                if cx >= w:
+                                    cx -= w
                             else:
-                                img_decal = cv2.resize(img_decal, (target_w, target_h), interpolation=cv2.INTER_AREA)
-                                img_decal_f = img_decal.astype(np.float32) / 255.0
-                            ph, pw = min(target_h, roi_graded.shape[0] - off_y), min(target_w, roi_graded.shape[1] - off_x)
-                            if ph > 0 and pw > 0:
-                                p = img_decal_f[:ph, :pw]
-                                if p.ndim == 3 and p.shape[-1] == 4:
-                                    alpha = p[..., 3:4]
-                                    rgb = p[..., :3]
-                                    rgb = np.power(np.clip(rgb, 0, 1), 2.2) # sRGB to Linear
-                                    current_bg = roi_graded[off_y:off_y+ph, off_x:off_x+pw]
-                                    local_mask = roi_mask[off_y:off_y+ph, off_x:off_x+pw]
-                                    if local_mask.ndim == 2:
-                                        local_mask = local_mask[..., np.newaxis]
-                                    combined_alpha = alpha * local_mask
-                                    roi_graded[off_y:off_y+ph, off_x:off_x+pw] = current_bg * (1.0 - combined_alpha) + rgb * combined_alpha
-                                elif p.ndim == 3 and p.shape[-1] == 3:
-                                    rgb = np.power(np.clip(p, 0, 1), 2.2)
-                                    current_bg = roi_graded[off_y:off_y+ph, off_x:off_x+pw]
-                                    local_mask = roi_mask[off_y:off_y+ph, off_x:off_x+pw]
-                                    if local_mask.ndim == 2:
-                                        local_mask = local_mask[..., np.newaxis]
-                                    roi_graded[off_y:off_y+ph, off_x:off_x+pw] = current_bg * (1.0 - local_mask) + rgb * local_mask
+                                cx = (sx1 + sx2) / 2.0
+                            cy = (sy1 + sy2) / 2.0
+                            img_decal_f = SphericalProjector.rect_to_equi_roi(
+                                img_decal_f, cx, cy, h, w, up_px1, up_px2, up_py1, up_py2
+                            )
+                        else:
+                            img_decal_f = _resize_bilinear_np(img_decal_f, target_w, target_h)
+                        ph, pw = min(target_h, roi_graded.shape[0] - off_y), min(target_w, roi_graded.shape[1] - off_x)
+                        if ph > 0 and pw > 0:
+                            p = img_decal_f[:ph, :pw]
+                            if p.ndim == 3 and p.shape[-1] == 4:
+                                alpha = p[..., 3:4]
+                                rgb = np.power(np.clip(p[..., :3], 0, 1), 2.2)
+                                current_bg = roi_graded[off_y:off_y+ph, off_x:off_x+pw]
+                                local_mask = roi_mask[off_y:off_y+ph, off_x:off_x+pw]
+                                if local_mask.ndim == 2:
+                                    local_mask = local_mask[..., np.newaxis]
+                                combined_alpha = alpha * local_mask
+                                roi_graded[off_y:off_y+ph, off_x:off_x+pw] = current_bg * (1.0 - combined_alpha) + rgb * combined_alpha
+                            elif p.ndim == 3 and p.shape[-1] == 3:
+                                rgb = np.power(np.clip(p, 0, 1), 2.2)
+                                current_bg = roi_graded[off_y:off_y+ph, off_x:off_x+pw]
+                                local_mask = roi_mask[off_y:off_y+ph, off_x:off_x+pw]
+                                if local_mask.ndim == 2:
+                                    local_mask = local_mask[..., np.newaxis]
+                                roi_graded[off_y:off_y+ph, off_x:off_x+pw] = current_bg * (1.0 - local_mask) + rgb * local_mask
             elif mask_layer.mode == "Solid Fill":
                 roi_graded[:] = np.array(mask_layer.fill_color, dtype=np.float32)
             elif mask_layer.mode == "Chroma Replace":
@@ -599,24 +789,26 @@ class CalibrationPipeline:
                     ksize = int(blur_px * 2) + 1
                     if ksize % 2 == 0:
                         ksize += 1
-                    try:
-                        import cv2
+                    cv2 = _safe_get_cv2()
+                    if cv2 is not None:
                         roi_h, roi_w = roi_graded.shape[:2]
                         if max(roi_h, roi_w) > 500 and ksize > 15:
-                            scale = 500.0 / max(roi_h, roi_w)
-                            small_ksize = max(int(ksize * scale), 5)
-                            if small_ksize % 2 == 0: small_ksize += 1
-                            small_img = cv2.resize(roi_graded, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-                            blurred = cv2.GaussianBlur(small_img, (small_ksize, small_ksize), blur_px * scale)
+                            b_scale = 500.0 / max(roi_h, roi_w)
+                            small_ksize = max(int(ksize * b_scale), 5)
+                            if small_ksize % 2 == 0:
+                                small_ksize += 1
+                            small_img = cv2.resize(roi_graded, (0, 0), fx=b_scale, fy=b_scale, interpolation=cv2.INTER_AREA)
+                            blurred = cv2.GaussianBlur(small_img, (small_ksize, small_ksize), blur_px * b_scale)
                             roi_graded = cv2.resize(blurred, (roi_w, roi_h), interpolation=cv2.INTER_LINEAR)
                         else:
                             roi_graded = cv2.GaussianBlur(roi_graded, (ksize, ksize), blur_px)
-                    except ImportError:
+                    else:
                         try:
                             from scipy.ndimage import gaussian_filter
                             roi_graded = gaussian_filter(roi_graded, sigma=(blur_px, blur_px, 0))
                         except ImportError:
-                            pass
+                            from hdri_match.analysis.sun_relighter import _blur_numpy_separable
+                            roi_graded = _blur_numpy_separable(roi_graded, blur_px)
                 
             if mask_layer.blend < 1.0:
                 roi_mask = roi_mask * mask_layer.blend
@@ -644,11 +836,7 @@ class CalibrationPipeline:
                 return self._create_proxy(arr, max_dim=800)
             if arr.shape[:2] == target_shape:
                 return arr.copy()
-            try:
-                import cv2
-                return cv2.resize(arr, (target_shape[1], target_shape[0]), interpolation=cv2.INTER_AREA)
-            except ImportError:
-                return self._create_proxy(arr, max_dim=800)
+            return _resize_bilinear_np(arr, target_shape[1], target_shape[0])
 
         if self.state.hdri_array is not None:
             self.state.hdri_proxy = _resize(self.state.hdri_array)
@@ -743,23 +931,8 @@ class CalibrationPipeline:
             first_key = list(lights.keys())[0]
             cg_h, cg_w = lights[first_key].shape[:2]
             if self.state.cg_beauty.shape[:2] != (cg_h, cg_w):
-                try:
-                    import cv2
-                    self.state.cg_beauty = cv2.resize(self.state.cg_beauty, (cg_w, cg_h), interpolation=cv2.INTER_AREA)
-                    self.state.cg_beauty_proxy = self._create_proxy(self.state.cg_beauty)
-                except ImportError:
-                    try:
-                        from scipy.ndimage import zoom
-                        sy = cg_h / self.state.cg_beauty.shape[0]
-                        sx = cg_w / self.state.cg_beauty.shape[1]
-                        self.state.cg_beauty = zoom(self.state.cg_beauty, (sy, sx, 1), order=1)
-                        self.state.cg_beauty_proxy = self._create_proxy(self.state.cg_beauty)
-                    except ImportError:
-                        import numpy as np
-                        y = np.linspace(0, self.state.cg_beauty.shape[0] - 1, cg_h).astype(int)
-                        x = np.linspace(0, self.state.cg_beauty.shape[1] - 1, cg_w).astype(int)
-                        self.state.cg_beauty = self.state.cg_beauty[y, :][:, x, :]
-                        self.state.cg_beauty_proxy = self._create_proxy(self.state.cg_beauty)
+                self.state.cg_beauty = _resize_bilinear_np(self.state.cg_beauty, cg_w, cg_h)
+                self.state.cg_beauty_proxy = self._create_proxy(self.state.cg_beauty)
         except Exception as e:
             print(f"Warning: could not load CG beauty pass: {e}")
             self.state.cg_beauty = None
@@ -773,18 +946,7 @@ class CalibrationPipeline:
             first_key = list(lights.keys())[0]
             cg_h, cg_w = lights[first_key].shape[:2]
             if h != cg_h or w != cg_w:
-                try:
-                    import cv2
-                    alpha = cv2.resize(alpha, (cg_w, cg_h), interpolation=cv2.INTER_AREA)
-                except ImportError:
-                    try:
-                        from scipy.ndimage import zoom
-                        alpha = zoom(alpha, (cg_h / h, cg_w / w), order=1)
-                    except ImportError:
-                        import numpy as np
-                        y = np.linspace(0, h - 1, cg_h).astype(int)
-                        x = np.linspace(0, w - 1, cg_w).astype(int)
-                        alpha = alpha[y, :][:, x]
+                alpha = _resize_bilinear_np(alpha, cg_w, cg_h)
         self.state.cg_alpha = alpha
         if alpha is not None:
             self.state.cg_alpha_proxy = self._create_proxy(alpha.reshape(alpha.shape[0], alpha.shape[1], 1))

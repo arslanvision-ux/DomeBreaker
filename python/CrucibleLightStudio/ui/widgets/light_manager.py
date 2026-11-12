@@ -876,17 +876,24 @@ class LightManagerWidget(QtWidgets.QWidget):
     def _on_solo_toggled(self, prim_path, checked):
         if not self.backend:
             return
+        lights = self.backend.discover_lights()
+        pre_state = getattr(self, "_pre_solo_state", None)
         if checked:
+            # Capture pre-solo enabled states ONLY on initial solo entry so switching solo
+            # directly from Light A -> Light B preserves originally muted lights.
+            if pre_state is None:
+                self._pre_solo_state = {ld.prim_path: bool(ld.enabled) for ld in lights}
             self._soloed_path = prim_path
-            lights = self.backend.discover_lights()
             for ld in lights:
-                self.backend.set_light_enabled(ld.prim_path,
-                                                ld.prim_path == prim_path)
+                self.backend.set_light_enabled(ld.prim_path, ld.prim_path == prim_path)
         else:
             self._soloed_path = None
-            lights = self.backend.discover_lights()
+            restore_map = pre_state or {}
+            self._pre_solo_state = None
             for ld in lights:
-                self.backend.set_light_enabled(ld.prim_path, True)
+                prev_enabled = restore_map.get(ld.prim_path, True)
+                self.backend.set_light_enabled(ld.prim_path, bool(prev_enabled))
+        self.refresh_lights()
 
     def _on_prop_param_changed(self, param, value):
         if not self.backend: return

@@ -8,9 +8,75 @@ Python LOP cook callbacks.
 """
 
 import math
+import os
+import sys
+import tempfile
 import numpy as np
 
-from pxr import Usd, UsdGeom, UsdLux, UsdShade, Sdf, Gf
+try:
+    from pxr import Usd, UsdGeom, UsdLux, UsdShade, Sdf, Gf
+except ImportError:
+    Usd = UsdGeom = UsdLux = UsdShade = Sdf = Gf = None
+
+
+def resolve_workspace_dir(subdir: str = "hdri_match") -> str:
+    """Resolve a writable workspace directory for baked EXRs, textures, and caches.
+
+    Priority:
+      1. Valid ``$HIP`` (ignoring ``""``, ``"."``, and ``houdini_temp``).
+      2. Valid ``$JOB``.
+      3. Platform temporary workspace (never hardcoded developer paths).
+    """
+    candidates = []
+    if "hou" in sys.modules:
+        hou = sys.modules["hou"]
+        for var in ("HIP", "JOB"):
+            try:
+                val = (hou.getenv(var) or "").strip()
+            except Exception:
+                val = ""
+            if val:
+                candidates.append(val)
+
+    for env_var in ("DOMEBREAKER_OUTPUT_DIR", "HIP", "JOB"):
+        val = os.environ.get(env_var, "").strip()
+        if val:
+            candidates.append(val)
+
+    for raw in candidates:
+        norm = os.path.normpath(raw).replace("\\", "/")
+        low = norm.lower()
+        if norm in ("", ".") or "houdini_temp" in low:
+            continue
+        out = os.path.join(norm, subdir) if subdir else norm
+        return out.replace("\\", "/")
+
+    base = os.path.join(tempfile.gettempdir(), "domebreaker_workspace")
+    out = os.path.join(base, subdir) if subdir else base
+    return out.replace("\\", "/")
+
+
+resolve_output_dir = resolve_workspace_dir
+
+
+def get_or_create_solaris_stage_node(create: bool = False):
+    """Canonical Solaris LOP network resolver.
+
+    Checks ``/stage`` first, then ``/obj/stage``, and only creates
+    ``/obj/stage`` when ``create=True``. Never mutates the hip file if ``create=False``.
+    """
+    if "hou" not in sys.modules:
+        return None
+    hou = sys.modules["hou"]
+    for path in ("/stage", "/obj/stage"):
+        node = hou.node(path)
+        if node is not None:
+            return node
+    if create:
+        obj = hou.node("/obj")
+        if obj is not None:
+            return obj.createNode("lopnet", "stage")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +228,7 @@ def set_distant_light(stage, path, azimuth_deg, elevation_deg,
     look_at = Gf.Matrix4d()
     look_at.SetLookAt(eye, center, up)
     xform_mat = look_at.GetInverse()
+    xform_mat.SetTranslateOnly(Gf.Vec3d(0.0, 0.0, 0.0))
 
     xformable = UsdGeom.Xformable(sun.GetPrim())
     xformable.ClearXformOpOrder()

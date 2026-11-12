@@ -1,4 +1,5 @@
 import dataclasses
+import os
 from typing import Optional, Tuple, List
 import numpy as np
 import uuid
@@ -57,7 +58,9 @@ class MaskLayer:
     inpaint_key_green: bool = False
     inpaint_seed: int = 0
     inpaint_seed_method: str = "randomize"
-    inpaint_model_dir: str = r"E:\ComfyUI\ComfyUI\models"
+    inpaint_model_dir: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("COMFYUI_MODEL_DIR", "")
+    )
     inpaint_upscaler: str = "None"
     spherical_projection: bool = False
     is_inpainted: bool = False

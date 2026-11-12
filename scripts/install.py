@@ -20,6 +20,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 import json
 import glob
@@ -47,14 +48,15 @@ def get_project_root():
 
 
 def _is_supported_houdini_version(ver_str):
-    """Return True if the version string is Houdini 20.0 or newer."""
+    """Return True if the version string starts with Houdini 20.0 or newer."""
     if not ver_str:
         return False
+    m = re.match(r"^\s*v?(\d+(?:\.\d+)?)", str(ver_str))
+    if not m:
+        return False
     try:
-        parts = ver_str.split(".")
-        major = float(parts[0] + "." + parts[1]) if len(parts) >= 2 else float(parts[0])
-        return major >= 20.0
-    except Exception:
+        return float(m.group(1)) >= 20.0
+    except ValueError:
         return False
 
 
@@ -218,12 +220,6 @@ def install(target_dir=None):
             installed_count += 1
         except Exception as e:
             print(f"[ERROR] Failed to write {pkg_file}: {e}")
-
-    # Also save a canonical copy inside the repository's houdini/packages folder
-    repo_pkg = os.path.join(root, "houdini", "packages", "domebreaker.json")
-    os.makedirs(os.path.dirname(repo_pkg), exist_ok=True)
-    with open(repo_pkg, "w", encoding="utf-8") as f:
-        f.write(pkg_json_str)
 
     print("\n" + "=" * 65)
     if installed_count > 0:

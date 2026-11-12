@@ -76,18 +76,30 @@ def update_via_git(root):
             print("\n[SUCCESS] DomeBreaker is already up to date with the latest release!")
             return True, "Up to date"
 
-        # Pull
+        # Pull (fast-forward only so local edits never silently insert merge conflict markers)
         print("[INFO] Pulling updates...")
         pull_res = subprocess.run(["git", "pull", "--ff-only", "origin", "main"], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if pull_res.returncode != 0:
-            # Fallback to standard pull
-            pull_res = subprocess.run(["git", "pull", "origin", "main"], cwd=root, check=True)
+            err = pull_res.stderr.decode("utf-8", errors="replace").strip()
+            return False, f"git pull --ff-only failed: {err}"
 
         print("\n[SUCCESS] DomeBreaker successfully updated via Git!")
         return True, "Updated"
     except Exception as e:
         print(f"[WARNING] Git update encountered an issue: {e}")
         return False, str(e)
+
+
+def _safe_extract_zip(zip_path, extract_dir):
+    """Safely extract archive after validating every member against Zip-Slip path traversal."""
+    os.makedirs(extract_dir, exist_ok=True)
+    real_extract = os.path.realpath(extract_dir)
+    with zipfile.ZipFile(zip_path, "r") as z:
+        for member in z.infolist():
+            target_path = os.path.realpath(os.path.join(real_extract, member.filename))
+            if os.path.commonpath([real_extract, target_path]) != real_extract:
+                raise RuntimeError(f"Blocked unsafe ZIP member path traversal: {member.filename}")
+        z.extractall(real_extract)
 
 
 def update_via_zip(root):
@@ -134,8 +146,7 @@ def update_via_zip(root):
 
         print("[INFO] Extracting update archive...")
         extract_dir = os.path.join(tmp_dir, "extracted")
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(extract_dir)
+        _safe_extract_zip(zip_path, extract_dir)
 
         # GitHub archives extract into a top-level directory like 'DomeBreaker-main'
         subfolders = [os.path.join(extract_dir, d) for d in os.listdir(extract_dir) if os.path.isdir(os.path.join(extract_dir, d))]
@@ -190,16 +201,14 @@ def run_update():
     # Try Git first
     git_ok, reason = update_via_git(root)
     if git_ok:
-        print("\nIf Houdini is currently open, click 'Reload DomeBreaker' on the shelf")
-        print("or restart Houdini to load the updated code.")
+        print("\nPlease restart Houdini if currently open to load the updated code.")
         return True
 
     # Fallback to direct download
     print(f"[INFO] Git update skipped ({reason}). Using direct GitHub updater...")
     success = update_via_zip(root)
     if success:
-        print("\nIf Houdini is currently open, click 'Reload DomeBreaker' on the shelf")
-        print("or restart Houdini to load the updated code.")
+        print("\nPlease restart Houdini if currently open to load the updated code.")
     return success
 
 

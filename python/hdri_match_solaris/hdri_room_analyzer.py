@@ -228,7 +228,10 @@ def analyze_hdri_room(image_input, tripod_height=1.50, user_yaw_offset=0.0):
         except Exception:
             # Fallback for HDR/EXR formats via raw numpy or image loader
             import sys
-            for cand in [os.environ.get("HDRI_MATCH_PLATE_ROOT", ""), "E:/PROJECTS/HDRI_Match_Plate", "e:/PROJECTS/HDRI_Match_Plate"]:
+            for cand in [
+                os.environ.get("HDRI_MATCH_PLATE_ROOT", ""),
+                os.path.join(os.environ.get("DOMEBREAKER_ROOT", ""), "python") if os.environ.get("DOMEBREAKER_ROOT") else "",
+            ]:
                 if cand and os.path.isdir(cand) and cand not in sys.path:
                     sys.path.insert(0, cand)
             from hdri_match.io.loader import load_exr_to_numpy

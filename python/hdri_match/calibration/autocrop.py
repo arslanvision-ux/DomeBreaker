@@ -1,10 +1,25 @@
+import sys
 import numpy as np
-import cv2
+
+
+def _get_cv2():
+    """Import cv2 only outside Houdini to prevent Qt/X11/OpenCL ABI conflicts."""
+    if "hou" in sys.modules:
+        return None
+    try:
+        import cv2
+        return cv2
+    except ImportError:
+        return None
+
 
 class AutoCropper:
     @staticmethod
     def autocrop_ball(image: np.ndarray) -> np.ndarray:
         """Finds the largest circular object and crops the image to it."""
+        cv2 = _get_cv2()
+        if cv2 is None:
+            return image
         try:
             # Convert to 8-bit for OpenCV
             img_8u = np.clip(image * 255.0, 0, 255).astype(np.uint8)
@@ -80,6 +95,9 @@ class AutoCropper:
     @staticmethod
     def autocrop_macbeth(image: np.ndarray) -> np.ndarray:
         """Finds the Macbeth chart by looking for a cluster of square patches."""
+        cv2 = _get_cv2()
+        if cv2 is None:
+            return image
         try:
             img_8u = np.clip(image * 255.0, 0, 255).astype(np.uint8)
             gray = cv2.cvtColor(img_8u, cv2.COLOR_RGB2GRAY)

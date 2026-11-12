@@ -11,7 +11,8 @@ try:
     from hdri_match.analysis.hdri_stats import HDRIStats
 except ImportError:
     import os, sys
-    for cand in [os.environ.get("HDRI_MATCH_PLATE_ROOT", ""), "E:/PROJECTS/HDRI_Match_Plate", "e:/PROJECTS/HDRI_Match_Plate"]:
+    _db_py = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    for cand in [os.environ.get("HDRI_MATCH_PLATE_ROOT", ""), _db_py]:
         if cand and os.path.isdir(cand) and cand not in sys.path:
             sys.path.insert(0, cand)
     try:
@@ -62,10 +63,29 @@ except Exception:
     pass
 
 try:
+    from hdri_match_solaris.usd_helpers import (
+        resolve_workspace_dir,
+        get_or_create_solaris_stage_node,
+    )
+except Exception:
+    def resolve_workspace_dir(subdir="hdri_match"):
+        hip_dir = hou.expandString("$HIP") if "hou" in sys.modules and hasattr(hou, "expandString") else ""
+        if not hip_dir or hip_dir == "." or "houdini_temp" in hip_dir or not os.path.isdir(hip_dir):
+            hip_dir = os.path.expanduser("~")
+        base_dir = os.path.join(hip_dir, subdir).replace("\\", "/") if subdir else hip_dir.replace("\\", "/")
+        os.makedirs(base_dir, exist_ok=True)
+        return base_dir
+
+    def get_or_create_solaris_stage_node(create=False):
+        stage = hou.node("/stage") if "hou" in sys.modules else None
+        if stage is None and create and "hou" in sys.modules:
+            obj = hou.node("/obj")
+            if obj is not None:
+                stage = obj.createNode("lopnet", "stage")
+        return stage
+
+try:
     from hdri_match_solaris import renderer_materials as _rmat
-    if _rmat is not None and not hasattr(_rmat, "create_or_update_material_library"):
-        import importlib
-        _rmat = importlib.reload(_rmat)
 except Exception:
     _rmat = None
 
@@ -76,13 +96,12 @@ except Exception:
 
 
 def _get_create_or_update_material_library():
-    """Safely import or reload create_or_update_material_library from renderer_materials."""
+    """Safely import create_or_update_material_library from renderer_materials without hot-reload."""
     global _rmat
     try:
-        import sys, importlib
-        if _rmat is None or not hasattr(_rmat, "create_or_update_material_library"):
+        if _rmat is None:
             from hdri_match_solaris import renderer_materials
-            _rmat = importlib.reload(renderer_materials)
+            _rmat = renderer_materials
         return getattr(_rmat, "create_or_update_material_library", None)
     except Exception as e:
         print(f"[HDRI Match Solaris] Warning: Could not load create_or_update_material_library: {e}")
@@ -108,10 +127,6 @@ def _find_crucible_root():
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "CrucibleLightStudio")),
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "Crucible")),
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Crucible")),
-        r"D:\PROJECTS\CrucibleLightStudio",
-        r"D:\PROJECTS\Crucible",
-        r"C:\PROJECTS\CrucibleLightStudio",
-        r"C:\PROJECTS\Crucible",
         os.path.expanduser("~/CrucibleLightStudio"),
         os.path.expanduser("~/Crucible"),
         "/opt/CrucibleLightStudio",
@@ -443,7 +458,7 @@ class ColorPickerWidget(QtWidgets.QWidget):
             "QPushButton:checked { color: #fff; background: #d35400; border-color: #ff9f43; font-weight: bold; }"
         )
 
-        self.btn_toggle_rgb = QtWidgets.QPushButton("▸ RGB")
+        self.btn_toggle_rgb = QtWidgets.QPushButton("+ RGB")
         self.btn_toggle_rgb.setCheckable(True)
         self.btn_toggle_rgb.setChecked(False)
         self.btn_toggle_rgb.setFixedHeight(22)
@@ -455,7 +470,7 @@ class ColorPickerWidget(QtWidgets.QWidget):
             "QPushButton:checked { color: #e67e22; background: #2f2720; border-color: #e67e22; }"
         )
 
-        self.btn_reset = QtWidgets.QPushButton("↺")
+        self.btn_reset = QtWidgets.QPushButton("R")
         self.btn_reset.setToolTip(f"Reset {self._label} to Neutral White [1.0, 1.0, 1.0]")
         self.btn_reset.setFixedSize(22, 22)
         self.btn_reset.setStyleSheet(
@@ -543,7 +558,7 @@ class ColorPickerWidget(QtWidgets.QWidget):
 
     def _on_toggle_rgb(self, checked):
         self.rgb_box.setVisible(checked)
-        self.btn_toggle_rgb.setText("▾ RGB" if checked else "▸ RGB")
+        self.btn_toggle_rgb.setText("- RGB" if checked else "+ RGB")
 
     def _on_choose_color(self):
         initial = QtGui.QColor(
@@ -582,6 +597,45 @@ class ColorPickerWidget(QtWidgets.QWidget):
     def b(self): return float(self._color[2])
 
 
+_RETIRED_PANEL_WORKERS = set()
+
+
+def _retire_panel_worker(worker, timeout_ms=50):
+    """Safely cancel, disconnect, and retire a QThread without blocking X11/PCoIP or triggering ~QThread crash."""
+    if worker is None:
+        return
+    try:
+        if hasattr(worker, "cancel"):
+            worker.cancel()
+        else:
+            worker.requestInterruption()
+    except Exception:
+        pass
+    for sig_name in ("bakeFinished", "bakeFailed", "bakeProgress", "progress", "finished", "failed"):
+        sig = getattr(worker, sig_name, None)
+        if sig is not None:
+            try:
+                sig.disconnect()
+            except Exception:
+                pass
+    try:
+        if worker.isRunning():
+            worker.quit()
+            worker.wait(timeout_ms)
+    except Exception:
+        pass
+    try:
+        if worker.isRunning():
+            _RETIRED_PANEL_WORKERS.add(worker)
+            worker.finished.connect(
+                lambda w=worker: (_RETIRED_PANEL_WORKERS.discard(w), w.deleteLater())
+            )
+        else:
+            worker.deleteLater()
+    except Exception:
+        pass
+
+
 class BackgroundBakeWorker(QtCore.QThread):
     """
     Dedicated background worker that executes NumPy image processing and OpenImageIO
@@ -595,10 +649,20 @@ class BackgroundBakeWorker(QtCore.QThread):
         super().__init__(parent)
         self._mutex = QtCore.QMutex()
         self._pending_params = None
+        self._cancelled = False
+
+    def cancel(self):
+        """Request cooperative cancellation and drop any queued stale bake."""
+        self._mutex.lock()
+        self._cancelled = True
+        self._pending_params = None
+        self._mutex.unlock()
+        self.requestInterruption()
 
     def request_bake(self, params):
         """Thread-safe submission of latest parameter snapshot. Replaces any pending stale request."""
         self._mutex.lock()
+        self._cancelled = False
         self._pending_params = dict(params)
         self._mutex.unlock()
         if not self.isRunning():
@@ -608,12 +672,15 @@ class BackgroundBakeWorker(QtCore.QThread):
         import OpenImageIO as oiio
 
         while True:
+            if self._cancelled or self.isInterruptionRequested():
+                break
             self._mutex.lock()
             params = self._pending_params
             self._pending_params = None
+            cancelled = self._cancelled
             self._mutex.unlock()
 
-            if params is None:
+            if cancelled or params is None:
                 break
 
             try:
@@ -766,32 +833,59 @@ class BackgroundBakeWorker(QtCore.QThread):
                         ratio = compressed_luma / luma_safe
                         img = np.where(mask, img * ratio, img)
 
+                if self._cancelled or self.isInterruptionRequested():
+                    break
+
                 out_path = params["out_path"]
                 tmp_path = params["tmp_path"]
+
+                img_clean = np.nan_to_num(img, nan=0.0, posinf=65504.0, neginf=0.0)
+                if img_clean.ndim == 2:
+                    img_clean = np.stack([img_clean] * 3, axis=-1)
+                elif img_clean.ndim == 3 and img_clean.shape[2] >= 3:
+                    img_clean = img_clean[..., :3]
+                contiguous = np.ascontiguousarray(img_clean, dtype=np.float32)
 
                 compression = params.get("compression", "rle")
                 spec = oiio.ImageSpec(w, h, 3, oiio.HALF)
                 spec.attribute("compression", compression)
 
                 out = oiio.ImageOutput.create(tmp_path)
-                if out:
-                    out.open(tmp_path, spec)
-                    out.write_image(img.astype(np.float32))
-                    out.close()
+                if not out:
+                    err = oiio.geterror() if hasattr(oiio, "geterror") else ""
+                    self.bakeFailed.emit(f"Failed to create OIIO output for {tmp_path}: {err}")
+                    continue
 
-                    if os.path.exists(out_path):
-                        try: os.remove(out_path)
-                        except Exception: pass
-                    try:
-                        os.replace(tmp_path, out_path)
-                    except Exception:
-                        out_path = tmp_path
+                opened = False
+                try:
+                    opened = bool(out.open(tmp_path, spec))
+                    if not opened:
+                        err = out.geterror() if hasattr(out, "geterror") else (oiio.geterror() if hasattr(oiio, "geterror") else "")
+                        raise IOError(f"OpenImageIO open() failed for {tmp_path}: {err}")
+                    ok = bool(out.write_image(contiguous))
+                    if not ok:
+                        err = out.geterror() if hasattr(out, "geterror") else (oiio.geterror() if hasattr(oiio, "geterror") else "")
+                        raise IOError(f"OpenImageIO write_image() failed for {tmp_path}: {err}")
+                finally:
+                    if opened:
+                        try:
+                            out.close()
+                        except Exception:
+                            pass
 
+                if os.path.exists(out_path):
+                    try: os.remove(out_path)
+                    except Exception: pass
+                try:
+                    os.replace(tmp_path, out_path)
+                except Exception:
+                    out_path = tmp_path
+
+                if not (self._cancelled or self.isInterruptionRequested()):
                     self.bakeFinished.emit(out_path, ev, black, temp, tint, sat, contrast)
-                else:
-                    self.bakeFailed.emit(f"Failed to create OIIO output for {tmp_path}")
             except Exception as e:
-                self.bakeFailed.emit(str(e))
+                if not (self._cancelled or self.isInterruptionRequested()):
+                    self.bakeFailed.emit(str(e))
 
 
 class SplatDownloadWorker(QtCore.QThread):
@@ -803,14 +897,26 @@ class SplatDownloadWorker(QtCore.QThread):
     def __init__(self, dest_dir, parent=None):
         super().__init__(parent)
         self.dest_dir = dest_dir
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+        self.requestInterruption()
 
     def run(self):
         try:
             from hdri_match_solaris.gaussian_splat import download_sample_splat
-            path = download_sample_splat(self.dest_dir, progress_callback=lambda p, m: self.progress.emit(p, m))
-            self.finished.emit(path)
+            path = download_sample_splat(
+                self.dest_dir,
+                progress_callback=lambda p, m: (
+                    None if (self._cancelled or self.isInterruptionRequested()) else self.progress.emit(p, m)
+                ),
+            )
+            if not (self._cancelled or self.isInterruptionRequested()):
+                self.finished.emit(path)
         except Exception as e:
-            self.failed.emit(str(e))
+            if not (self._cancelled or self.isInterruptionRequested()):
+                self.failed.emit(str(e))
 
 
 class SplatBakeWorker(QtCore.QThread):
@@ -823,9 +929,18 @@ class SplatBakeWorker(QtCore.QThread):
         super().__init__(parent)
         self._mutex = QtCore.QMutex()
         self._params = None
+        self._cancelled = False
+
+    def cancel(self):
+        self._mutex.lock()
+        self._cancelled = True
+        self._params = None
+        self._mutex.unlock()
+        self.requestInterruption()
 
     def request_bake(self, params):
         self._mutex.lock()
+        self._cancelled = False
         self._params = dict(params)
         self._mutex.unlock()
         if not self.isRunning():
@@ -833,21 +948,18 @@ class SplatBakeWorker(QtCore.QThread):
 
     def run(self):
         while True:
+            if self._cancelled or self.isInterruptionRequested():
+                break
             self._mutex.lock()
             params = self._params
             self._params = None
+            cancelled = self._cancelled
             self._mutex.unlock()
 
-            if params is None:
+            if cancelled or params is None:
                 break
 
             try:
-                import importlib
-                try:
-                    import hdri_match_solaris.gaussian_splat as _gsm
-                    importlib.reload(_gsm)
-                except Exception:
-                    pass
                 from hdri_match_solaris.gaussian_splat import GaussianSplatScene, GaussianSplatBaker
                 ply_path = params["ply_path"]
                 cam_pos = params["cam_pos"]
@@ -861,6 +973,9 @@ class SplatBakeWorker(QtCore.QThread):
                 scene = params.get("scene")
                 if scene is None or getattr(scene, "filepath", "") != ply_path:
                     scene = GaussianSplatScene.from_ply(ply_path)
+
+                if self._cancelled or self.isInterruptionRequested():
+                    break
 
                 bake_kwargs = {
                     "camera_pos": cam_pos,
@@ -882,12 +997,17 @@ class SplatBakeWorker(QtCore.QThread):
                     bake_kwargs = {k: v for k, v in bake_kwargs.items() if k in sig.parameters}
 
                 img = GaussianSplatBaker.bake_equirectangular(scene, **bake_kwargs)
+                if self._cancelled or self.isInterruptionRequested():
+                    break
                 self.bakeProgress.emit(99)
                 GaussianSplatBaker.save_exr(img, out_path, pixel_type="float")
+                if self._cancelled or self.isInterruptionRequested():
+                    break
                 self.bakeProgress.emit(100)
                 self.bakeFinished.emit(out_path)
             except Exception as e:
-                self.bakeFailed.emit(str(e))
+                if not (self._cancelled or self.isInterruptionRequested()):
+                    self.bakeFailed.emit(str(e))
 
 
 class PlanarBakeWorker(QtCore.QThread):
@@ -900,9 +1020,18 @@ class PlanarBakeWorker(QtCore.QThread):
         super().__init__(parent)
         self._mutex = QtCore.QMutex()
         self._params = None
+        self._cancelled = False
+
+    def cancel(self):
+        self._mutex.lock()
+        self._cancelled = True
+        self._params = None
+        self._mutex.unlock()
+        self.requestInterruption()
 
     def request_bake(self, params):
         self._mutex.lock()
+        self._cancelled = False
         self._params = dict(params)
         self._mutex.unlock()
         if not self.isRunning():
@@ -910,12 +1039,15 @@ class PlanarBakeWorker(QtCore.QThread):
 
     def run(self):
         while True:
+            if self._cancelled or self.isInterruptionRequested():
+                break
             self._mutex.lock()
             params = self._params
             self._params = None
+            cancelled = self._cancelled
             self._mutex.unlock()
 
-            if params is None:
+            if cancelled or params is None:
                 break
 
             try:
@@ -927,7 +1059,8 @@ class PlanarBakeWorker(QtCore.QThread):
                 res = int(params.get("resolution", 2048))
 
                 def progress_cb(pct, msg):
-                    self.bakeProgress.emit(int(pct), str(msg))
+                    if not (self._cancelled or self.isInterruptionRequested()):
+                        self.bakeProgress.emit(int(pct), str(msg))
 
                 tex_dict = GaussianSplatBaker.bake_planar_room_textures(
                     hdri_source=hdri_source,
@@ -938,9 +1071,11 @@ class PlanarBakeWorker(QtCore.QThread):
                     resolution_walls=res,
                     progress_callback=progress_cb,
                 )
-                self.bakeFinished.emit(tex_dict)
+                if not (self._cancelled or self.isInterruptionRequested()):
+                    self.bakeFinished.emit(tex_dict)
             except Exception as e:
-                self.bakeFailed.emit(str(e))
+                if not (self._cancelled or self.isInterruptionRequested()):
+                    self.bakeFailed.emit(str(e))
 
 
 class HDRIDebugWindow(QtWidgets.QDialog):
@@ -951,7 +1086,7 @@ class HDRIDebugWindow(QtWidgets.QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("HDRI Match Solaris â Live Debug Console & Error Output")
+        self.setWindowTitle("HDRI Match Solaris - Live Debug Console & Error Output")
         self.resize(780, 520)
         self.setMinimumSize(520, 320)
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.Window)
@@ -1423,10 +1558,10 @@ class HDRIBoundaryLargeViewDialog(QtWidgets.QDialog):
         bot_bar.setSpacing(12)
 
         legend_items = [
-            ("■ Floor", "#00e5ff"),
-            ("■ Ceiling", "#ffb700"),
-            ("■ 4 Corners", "#ff007f"),
-            ("┅ Horizon", "#bbbbbb"),
+            ("[Floor]", "#00e5ff"),
+            ("[Ceiling]", "#ffb700"),
+            ("[4 Corners]", "#ff007f"),
+            ("-- Horizon", "#bbbbbb"),
         ]
         for name, col in legend_items:
             lbl_leg = QtWidgets.QLabel(name)
@@ -1469,7 +1604,7 @@ class CollapsibleSection(QtWidgets.QWidget):
     """
     Production-grade collapsible section widget for Houdini Solaris panels.
     Provides:
-    - Interactive header bar with rotating expand/collapse arrow (▼ / ▶)
+    - Interactive header bar with rotating expand/collapse arrow (v / >)
     - Optional checkable feature toggle checkbox ([x] Feature Name)
     - Content container (self.content_widget) that cleanly hides/shows in QScrollArea
     - Auto-expansion when an enabled feature checkbox is checked
@@ -1496,7 +1631,7 @@ class CollapsibleSection(QtWidgets.QWidget):
         header_lay.setSpacing(8)
 
         # Arrow indicator
-        self.lbl_arrow = QtWidgets.QLabel("▼" if not self._is_collapsed else "▶")
+        self.lbl_arrow = QtWidgets.QLabel("v" if not self._is_collapsed else ">")
         self.lbl_arrow.setStyleSheet("color: #e67e22; font-size: 10px; font-weight: bold;")
         header_lay.addWidget(self.lbl_arrow)
 
@@ -1567,7 +1702,7 @@ class CollapsibleSection(QtWidgets.QWidget):
             return
         self._is_collapsed = collapsed
         self.content_widget.setVisible(not collapsed)
-        self.lbl_arrow.setText("▶" if collapsed else "▼")
+        self.lbl_arrow.setText(">" if collapsed else "v")
         self._update_header_style()
         self.collapsed_toggled.emit(collapsed)
 
@@ -1739,7 +1874,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        print("[DomeBreaker] Loading v2.0.4...")
+        print("[DomeBreaker] Loading v2.0.5...")
         self._initializing = True
         self._restoring_state = False
         if not parent and self.isWindow():
@@ -1810,7 +1945,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         restored = self._restore_state_from_scene(notify=False, allow_prefs=False)
         self._initializing = False
         self.log("DomeBreaker panel initialized. Ready.", "SUCCESS")
-        print("[DomeBreaker] Ready v2.0.4.")
+        print("[DomeBreaker] Ready v2.0.5.")
 
     def _get_bg_bake_worker(self):
         if self._bg_bake_worker is None:
@@ -1849,20 +1984,18 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         return self._debug_win
 
     def closeEvent(self, event):
-        """Save entire session state and safely terminate background threads when panel is closed."""
-        for worker in (
-            getattr(self, "_bg_bake_worker", None),
-            getattr(self, "_splat_bake_worker", None),
-            getattr(self, "_prop_bake_worker", None),
-            getattr(self, "_planar_bake_worker", None),
-            getattr(self, "_splat_download_worker", None),
+        """Save entire session state and safely retire background threads when panel is closed."""
+        for attr in (
+            "_bg_bake_worker",
+            "_splat_bake_worker",
+            "_prop_bake_worker",
+            "_planar_bake_worker",
+            "_splat_download_worker",
         ):
-            if worker and worker.isRunning():
-                try:
-                    worker.quit()
-                    worker.wait(100)
-                except Exception:
-                    pass
+            worker = getattr(self, attr, None)
+            if worker is not None:
+                _retire_panel_worker(worker)
+                setattr(self, attr, None)
         if getattr(self, "_crucible_panel", None) and hasattr(self._crucible_panel, "asset_library"):
             try:
                 if hasattr(self._crucible_panel.asset_library, "stop_workers"):
@@ -1945,7 +2078,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lbl_t.setAlignment(QtCore.Qt.AlignCenter)
         lbl_t.setStyleSheet("font-size: 20px; font-weight: 900; color: #ffae19; letter-spacing: 2px;")
 
-        lbl_v = QtWidgets.QLabel("v2.0.0 — Solaris USD Lighting & Environment Suite")
+        lbl_v = QtWidgets.QLabel("v2.0.5 - Solaris USD Lighting & Environment Suite")
         lbl_v.setAlignment(QtCore.Qt.AlignCenter)
         lbl_v.setStyleSheet("font-size: 11px; font-weight: bold; color: #5dade2; letter-spacing: 0.8px;")
         title_box.addWidget(lbl_t)
@@ -1961,12 +2094,12 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         feat_layout.setSpacing(6)
 
         features = [
-            "⚡ <b>Physical Sun Relighting:</b> Perez all-weather sky reconstruction & CCT.",
+            "<b>Physical Sun Relighting:</b> Perez all-weather sky reconstruction & CCT.",
             "[i] <b>Multi-Light Extraction:</b> Automatic cluster detection & inpainting.",
-            " <b>HDRI Room Analyzer:</b> Manhattan-world boundary fitting & camera anchoring.",
-            " <b>Ground & Room Projection:</b> Real-time local IBL parallax in Solaris.",
-            " <b>SplatForge:</b> 3D Gaussian Splats to USD environment reconstruction.",
-            " <b>Crucible Light Studio:</b> Multi-studio light fixture & gobo library.",
+            "<b>HDRI Room Analyzer:</b> Manhattan-world boundary fitting & camera anchoring.",
+            "<b>Ground & Room Projection:</b> Real-time local IBL parallax in Solaris.",
+            "<b>SplatForge:</b> 3D Gaussian Splats to USD environment reconstruction.",
+            "<b>Crucible Light Studio:</b> Multi-studio light fixture & gobo library.",
         ]
         for f in features:
             flbl = QtWidgets.QLabel(f)
@@ -2069,7 +2202,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         )
         self.btn_read_stage.clicked.connect(lambda: self._restore_state_from_scene(notify=True))
 
-        self.btn_reset_defaults = QtWidgets.QPushButton("↺ Reset Defaults")
+        self.btn_reset_defaults = QtWidgets.QPushButton("Reset Defaults")
         self.btn_reset_defaults.setToolTip("Reset all parameters, stage nodes, and bakes back to factory defaults to start completely fresh.")
         self.btn_reset_defaults.setStyleSheet(
             "QPushButton { background-color: #3d1e1e; color: #ff7777; font-weight: bold; "
@@ -2092,7 +2225,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         if not ENABLE_CRUCIBLE:
             self.btn_toggle_crucible.hide()
 
-        self.btn_expand_all = QtWidgets.QPushButton("▼ Expand All")
+        self.btn_expand_all = QtWidgets.QPushButton("Expand All")
         self.btn_expand_all.setToolTip("Expand all sections")
         self.btn_expand_all.setStyleSheet(
             "QPushButton { background-color: #24272c; color: #bbb; border: 1px solid #363a42; "
@@ -2101,7 +2234,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         )
         self.btn_expand_all.clicked.connect(self._expand_all_sections)
 
-        self.btn_collapse_all = QtWidgets.QPushButton("▶ Collapse All")
+        self.btn_collapse_all = QtWidgets.QPushButton("Collapse All")
         self.btn_collapse_all.setToolTip("Collapse all sections")
         self.btn_collapse_all.setStyleSheet(
             "QPushButton { background-color: #24272c; color: #bbb; border: 1px solid #363a42; "
@@ -2428,7 +2561,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay_points.setContentsMargins(6, 8, 6, 6)
         lay_points.setSpacing(6)
         self._populate_splat_points_tab(lay_points)
-        # self.tabs_splat.addTab(self._tab_points, "☁️ USD Points & Geometry")
+        # self.tabs_splat.addTab(self._tab_points, "USD Points & Geometry")
 
         main_lay.addWidget(self.tabs_splat)
         self._scroll_layout.addWidget(sec)
@@ -2767,19 +2900,19 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         self.combo_arch_proxy_shape = QtWidgets.QComboBox()
         self.combo_arch_proxy_shape.addItems([
-            "⚡ Auto 3D Meshes (VDB & Depth Map)",
-            "⚡ Top-Down Depth Map Meshes (Counters & Tables)",
-            "⚡ OpenVDB Volumetric Meshes (Organic & Fixtures)",
+            "Auto 3D Meshes (VDB & Depth Map)",
+            "Top-Down Depth Map Meshes (Counters & Tables)",
+            "OpenVDB Volumetric Meshes (Organic & Fixtures)",
             "Cylinder Columns & Boxes (Primitive Proxy)",
             "Boxes Only (Oriented Bounding Boxes)",
             "Spheres / Rounded (Proxy)",
         ])
         self.combo_arch_proxy_shape.setToolTip(
             "Geometry representation for detected interior props:\n"
-            "• ⚡ Auto 3D Meshes: Watertight Depth Map heightfields with floor skirts for tables/desks, OpenVDB volumetric SDF meshes for plants/organic props.\n"
-            "• ⚡ Top-Down Depth Map: 2.5D elevation heightfield with vertical floor skirts (ideal for tables & flat counters).\n"
-            "• ⚡ OpenVDB Volumetric: True 3D OpenVDB particle SDF meshing (ideal for trees, plants, fixtures, organic sculptures).\n"
-            "• Primitive Proxies: Lightweight cylinder, box, or sphere bounding primitives."
+            "- Auto 3D Meshes: Watertight Depth Map heightfields with floor skirts for tables/desks, OpenVDB volumetric SDF meshes for plants/organic props.\n"
+            "- Top-Down Depth Map: 2.5D elevation heightfield with vertical floor skirts (ideal for tables & flat counters).\n"
+            "- OpenVDB Volumetric: True 3D OpenVDB particle SDF meshing (ideal for trees, plants, fixtures, organic sculptures).\n"
+            "- Primitive Proxies: Lightweight cylinder, box, or sphere bounding primitives."
         )
 
         self.lbl_arch_prop_res = QtWidgets.QLabel("Mesh Res:")
@@ -3063,7 +3196,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_pick_stage_prop.setToolTip("Pick an existing USD prim or file from the Solaris stage.")
         self.btn_pick_stage_prop.clicked.connect(self._on_pick_stage_prim_clicked)
 
-        self.btn_remove_custom_prop = QtWidgets.QPushButton("️ Remove")
+        self.btn_remove_custom_prop = QtWidgets.QPushButton("Remove")
         self.btn_remove_custom_prop.setStyleSheet(
             "QPushButton { background-color: #c0392b; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #e74c3c; }"
@@ -3086,7 +3219,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay.addLayout(btn_row)
 
         # Splat 3D Mesh Reconstruction Group (Heightfield / OpenVDB)
-        reconstruct_grp = QtWidgets.QGroupBox("⚡ 3D Prop Reconstruction from Gaussian Splats")
+        reconstruct_grp = QtWidgets.QGroupBox("3D Prop Reconstruction from Gaussian Splats")
         reconstruct_grp_lay = QtWidgets.QFormLayout(reconstruct_grp)
         reconstruct_grp_lay.setContentsMargins(6, 6, 6, 6)
         reconstruct_grp_lay.setSpacing(6)
@@ -3112,7 +3245,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         reconstruct_grp_lay.addRow("Method & Res:", rec_opts_row)
 
         rec_actions_row = QtWidgets.QHBoxLayout()
-        self.btn_reconstruct_splat_props = QtWidgets.QPushButton("⚡ Reconstruct 3D Props from Splats")
+        self.btn_reconstruct_splat_props = QtWidgets.QPushButton("Reconstruct 3D Props from Splats")
         self.btn_reconstruct_splat_props.setStyleSheet(
             "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; padding: 6px 12px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #9b59b6; }"
@@ -3227,7 +3360,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_browse_prop_texture.setToolTip("Browse and assign an existing texture map to this prop.")
         self.btn_browse_prop_texture.clicked.connect(self._on_browse_prop_texture_clicked)
 
-        self.btn_clear_prop_texture = QtWidgets.QPushButton("❌")
+        self.btn_clear_prop_texture = QtWidgets.QPushButton("Clear")
         self.btn_clear_prop_texture.setStyleSheet(
             "QPushButton { background-color: #7f8c8d; color: white; padding: 4px 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #95a5a6; }"
@@ -3346,7 +3479,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_update_stage_props.setToolTip("Update Solaris /stage custom prop nodes, snap to floor, and project splat texture.")
         self.btn_update_stage_props.clicked.connect(self._update_custom_props_stage_clicked)
 
-        self.btn_clear_stage_props = QtWidgets.QPushButton("️ Clear from Stage")
+        self.btn_clear_stage_props = QtWidgets.QPushButton("Clear from Stage")
         self.btn_clear_stage_props.setStyleSheet(
             "QPushButton { background-color: #7f8c8d; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #95a5a6; }"
@@ -3366,7 +3499,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
     def _populate_splat_points_tab(self, lay):
         """Populate Tab 5: Convert Gaussian Splats to USD Points and Texture Geometry."""
         info_box = QtWidgets.QLabel(
-            "<b>☁️ USD Points & Geometry Texturing</b><br>"
+            "<b>USD Points & Geometry Texturing</b><br>"
             "Convert 3D Gaussian Splats into renderable USD Points (<code>UsdGeom.Points</code>) with custom point size and density controls. "
             "Render them directly in Karma / Arnold / Redshift as a geometry base model, or texture 3D meshes in <code>/stage</code> from splat data."
         )
@@ -3406,7 +3539,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay.addWidget(grp_src)
 
         # 2. USD Points Settings Group
-        grp_pts = QtWidgets.QGroupBox("☁️ USD Points Generator (Base Model)")
+        grp_pts = QtWidgets.QGroupBox("USD Points Generator (Base Model)")
         grp_pts_lay = QtWidgets.QFormLayout(grp_pts)
         grp_pts_lay.setContentsMargins(6, 8, 6, 6)
         grp_pts_lay.setSpacing(6)
@@ -3531,7 +3664,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         # Action Buttons
         act_row_1 = QtWidgets.QHBoxLayout()
-        self.btn_convert_load_points = QtWidgets.QPushButton("⚡ Convert & Load USD Points in /stage")
+        self.btn_convert_load_points = QtWidgets.QPushButton("Convert & Load USD Points in /stage")
         self.btn_convert_load_points.setStyleSheet(
             "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #2ecc71; }"
@@ -3552,14 +3685,14 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         grp_pts_lay.addRow(act_row_1)
 
         act_row_2 = QtWidgets.QHBoxLayout()
-        self.btn_toggle_points_vis = QtWidgets.QPushButton("️ Toggle Points Visibility")
+        self.btn_toggle_points_vis = QtWidgets.QPushButton("Toggle Points Visibility")
         self.btn_toggle_points_vis.setStyleSheet(
             "QPushButton { background-color: #34495e; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #4a6278; }"
         )
         self.btn_toggle_points_vis.clicked.connect(self._toggle_splat_points_vis)
 
-        self.btn_clear_points_stage = QtWidgets.QPushButton("️ Clear Points from Stage")
+        self.btn_clear_points_stage = QtWidgets.QPushButton("Clear Points from Stage")
         self.btn_clear_points_stage.setStyleSheet(
             "QPushButton { background-color: #7f8c8d; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #95a5a6; }"
@@ -3883,7 +4016,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         usd_path = os.path.join(out_dir, f"{safe_base}_points.usd").replace("\\", "/")
 
         self.btn_convert_load_points.setEnabled(False)
-        self.btn_convert_load_points.setText("⚡ Converting to USD Points...")
+        self.btn_convert_load_points.setText("Converting to USD Points...")
         QtWidgets.QApplication.processEvents()
 
         try:
@@ -3923,7 +4056,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 hou.ui.displayMessage(f"Failed to generate USD points: {e}", severity=hou.severityType.Error)
         finally:
             self.btn_convert_load_points.setEnabled(True)
-            self.btn_convert_load_points.setText("⚡ Convert & Load USD Points in /stage")
+            self.btn_convert_load_points.setText("Convert & Load USD Points in /stage")
 
     def _export_standalone_splat_points(self):
         """Export standalone USD Points file to a custom path on disk."""
@@ -4470,7 +4603,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
         try:
             self.btn_reconstruct_splat_props.setEnabled(False)
-            self.btn_reconstruct_splat_props.setText("⏳ Analyzing & Reconstructing...")
+            self.btn_reconstruct_splat_props.setText("Analyzing & Reconstructing...")
             QtWidgets.QApplication.processEvents()
 
             # 1. Load splat positions
@@ -4518,7 +4651,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
             chosen_method = self.combo_reconstruct_method.currentText() if hasattr(self, 'combo_reconstruct_method') else "Auto"
 
-            out_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/props"
+            out_dir = os.path.join(resolve_workspace_dir("scenes"), "props").replace("\\", "/")
             os.makedirs(out_dir, exist_ok=True)
 
             existing_names = {p.get("name") for p in self._custom_props}
@@ -4588,7 +4721,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             traceback.print_exc()
         finally:
             self.btn_reconstruct_splat_props.setEnabled(True)
-            self.btn_reconstruct_splat_props.setText("⚡ Reconstruct 3D Props from Splats")
+            self.btn_reconstruct_splat_props.setText("Reconstruct 3D Props from Splats")
 
     def _update_custom_props_stage_clicked(self):
         """Update or create custom props in Solaris /stage."""
@@ -4639,13 +4772,16 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                                     break
                             if hdri_tex: break
                     if not hdri_tex:
+                        env_default_exr = os.environ.get("HDRI_MATCH_DEFAULT_EXR", "")
                         cache_cands = [
-                            "E:/PROJECTS/HDRI_MATCH_SOLARIS/SPLATS/Reception room/splatforge_cache/textures/hdri_dome.exr",
-                            "E:/PROJECTS/HDRI_MATCH_SOLARIS/SPLATS/Reception room/splatforge_cache/textures/hdri_dome_2048x1024.exr",
-                            "E:/PROJECTS/HDRI_MATCH_SOLARIS/hdri_match/planar_textures_4096/floor_albedo.exr",
+                            os.path.join(resolve_workspace_dir("splatforge_cache"), "textures", "hdri_dome.exr").replace("\\", "/"),
+                            os.path.join(resolve_workspace_dir("splatforge_cache"), "textures", "hdri_dome_2048x1024.exr").replace("\\", "/"),
+                            os.path.join(resolve_workspace_dir("hdri_match"), "planar_textures_4096", "floor_albedo.exr").replace("\\", "/"),
                         ]
+                        if env_default_exr:
+                            cache_cands.append(env_default_exr)
                         for cc in cache_cands:
-                            if os.path.isfile(cc):
+                            if cc and os.path.isfile(cc):
                                 hdri_tex = cc
                                 break
 
@@ -5049,10 +5185,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.grp_ground_proj.setChecked(False)
 
         try:
-            import importlib
             from hdri_match_solaris import gaussian_splat, lop_splat
-            importlib.reload(gaussian_splat)
-            importlib.reload(lop_splat)
 
             self.btn_build_room_arch.setEnabled(False)
             self.btn_build_room_arch.setText("Analyzing Architecture...")
@@ -5065,7 +5198,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             scale_val = float(self.sld_arch_scale.value()) if hasattr(self, 'sld_arch_scale') else 1.0
             int_mode = "tight" if (hasattr(self, 'combo_arch_interior_mode') and self.combo_arch_interior_mode.currentIndex() == 0) else "full"
             build_props = self.chk_arch_props.isChecked() if hasattr(self, 'chk_arch_props') else True
-            proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "⚡ Auto 3D Meshes (VDB & Depth Map)"
+            proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "Auto 3D Meshes (VDB & Depth Map)"
             if "Depth Map" in proxy_shape_sel:
                 proxy_shape_mode = "mesh_depth"
             elif "OpenVDB" in proxy_shape_sel:
@@ -5118,10 +5251,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 mesh_method = "heightfield" if proxy_shape_mode == "mesh_depth" else ("vdb" if proxy_shape_mode == "mesh_vdb" else "auto")
                 floor_y_val = float(room_data.get("floor_y", 0.0))
 
-                hip_dir = hou.expandString("$HIP") if 'hou' in sys.modules and hasattr(hou, 'expandString') else "."
-                if not hip_dir or hip_dir == "." or "houdini_temp" in hip_dir:
-                    hip_dir = "E:/PROJECTS/HDRI_MATCH_SOLARIS"
-                out_props_dir = os.path.join(hip_dir, "scenes", "props").replace("\\", "/")
+                out_props_dir = os.path.join(resolve_workspace_dir("scenes"), "props").replace("\\", "/")
                 os.makedirs(out_props_dir, exist_ok=True)
 
                 self.log(f"Reconstructing {len(room_data['props'])} interior 3D prop meshes ({proxy_shape_sel}, res: {voxel_res}m)...", "INFO")
@@ -5188,8 +5318,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     os.path.join(os.path.dirname(ply_path), "hdri_match") if ply_path else "",
                     os.path.join(hip_dir, "tests", "hdri_match"),
                     os.path.join(hip_dir, "scenes"),
-                    "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/hdri_match",
-                    "E:/PROJECTS/HDRI_MATCH_SOLARIS/hdri_match",
+                    os.path.join(resolve_workspace_dir("scenes"), "hdri_match"),
+                    resolve_workspace_dir("hdri_match"),
                 ]
                 cand_names = [
                     f"{base_name}_splat_baked_hdri.exr",
@@ -5664,7 +5794,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 scale_val = float(self.sld_arch_scale.value()) if hasattr(self, 'sld_arch_scale') else 1.0
                 int_mode = "tight" if (hasattr(self, 'combo_arch_interior_mode') and self.combo_arch_interior_mode.currentIndex() == 0) else "full"
                 build_props = self.chk_arch_props.isChecked() if hasattr(self, 'chk_arch_props') else True
-                proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "⚡ Auto 3D Meshes (VDB & Depth Map)"
+                proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "Auto 3D Meshes (VDB & Depth Map)"
                 if "Depth Map" in proxy_shape_sel:
                     proxy_shape_mode = "mesh_depth"
                 elif "OpenVDB" in proxy_shape_sel:
@@ -5848,7 +5978,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     scale_val = float(self.sld_arch_scale.value()) if hasattr(self, 'sld_arch_scale') else 1.0
                     int_mode = "tight" if (hasattr(self, 'combo_arch_interior_mode') and self.combo_arch_interior_mode.currentIndex() == 0) else "full"
                     build_props = self.chk_arch_props.isChecked() if hasattr(self, 'chk_arch_props') else True
-                    proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "⚡ Auto 3D Meshes (VDB & Depth Map)"
+                    proxy_shape_sel = self.combo_arch_proxy_shape.currentText() if hasattr(self, 'combo_arch_proxy_shape') else "Auto 3D Meshes (VDB & Depth Map)"
                     if "Depth Map" in proxy_shape_sel:
                         proxy_shape_mode = "mesh_depth"
                     elif "OpenVDB" in proxy_shape_sel:
@@ -5952,7 +6082,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             candidates = [
                 os.path.join(hip_dir, "hdri_match", f"{base_name}_splat_baked_hdri.exr"),
                 os.path.join(hip_dir, "scenes", "restaurant_cock_n_hen_hdri.exr"),
-                "E:/PROJECTS/HDRI_MATCH_SOLARIS/scenes/restaurant_cock_n_hen_hdri.exr",
+                os.path.join(resolve_workspace_dir("scenes"), "restaurant_cock_n_hen_hdri.exr"),
             ]
             for cand in candidates:
                 if cand and os.path.isfile(cand):
@@ -6050,7 +6180,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.log(msg, "SUCCESS")
             if hou.isUIAvailable():
                 hou.ui.displayMessage(
-                    f"HDRI & Portal Textures Successfully Assigned:\n\n• Room Albedo: {res.get('albedo_texture')}\n• Portal Lights Textured: {p_count}",
+                    f"HDRI & Portal Textures Successfully Assigned:\n\n- Room Albedo: {res.get('albedo_texture')}\n- Portal Lights Textured: {p_count}",
                     title="Textures Assigned"
                 )
         except Exception as e:
@@ -6117,15 +6247,14 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _download_sample_splat_clicked(self):
         """Download official NVIDIA flowers_1.ply in background."""
-        hip_dir = hou.expandString("$HIP") if 'hou' in sys.modules and hasattr(hou, 'expandString') else "."
-        if not hip_dir or hip_dir == "." or "houdini_temp" in hip_dir:
-            hip_dir = os.path.expanduser("~")
-        dest_dir = os.path.join(hip_dir, "splats").replace(chr(92), "/")
+        dest_dir = resolve_workspace_dir("splats")
 
         self.btn_download_splat.setEnabled(False)
         self.btn_download_splat.setText("Connecting...")
         self.log(f"Starting sample splat download to {dest_dir}...", "INFO")
 
+        if getattr(self, "_splat_download_worker", None) is not None:
+            _retire_panel_worker(self._splat_download_worker)
         self._splat_download_worker = SplatDownloadWorker(dest_dir, parent=None)
         self._splat_download_worker.progress.connect(self._on_splat_download_progress)
         self._splat_download_worker.finished.connect(self._on_splat_download_finished)
@@ -6133,7 +6262,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._splat_download_worker.start()
 
     def _on_splat_download_progress(self, percent, msg):
-        self.btn_download_splat.setText(f" {percent}% - {msg}")
+        self.btn_download_splat.setText(f"{percent}% - {msg}")
 
     def _on_splat_download_finished(self, ply_path):
         self.btn_download_splat.setEnabled(True)
@@ -6146,7 +6275,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _on_splat_download_failed(self, error_msg):
         self.btn_download_splat.setEnabled(True)
-        self.btn_download_splat.setText(" Download Free Sample Splat (Retry)")
+        self.btn_download_splat.setText("Download Free Sample Splat (Retry)")
         self.log_error("Sample splat download failed", error_msg)
         if hou.isUIAvailable():
             hou.ui.displayMessage(f"Failed to download sample splat:\n{error_msg}", severity=hou.severityType.Error)
@@ -6463,12 +6592,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self.log_error("No active Solaris /stage node found.")
             return None
 
-        import importlib
-        try:
-            import hdri_match_solaris.lop_splat as lop_splat
-            importlib.reload(lop_splat)
-        except Exception:
-            from hdri_match_solaris import lop_splat
+        from hdri_match_solaris import lop_splat
 
         # If hiding
         if not visible:
@@ -6528,7 +6652,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     pass
             self.log(f"Splat Scene Point Cloud loaded in Solaris viewport: {usd_path}", "SUCCESS")
             if hasattr(self, 'btn_vis_splat_scene'):
-                self.btn_vis_splat_scene.setText("️ Hide Splat Cloud")
+                self.btn_vis_splat_scene.setText("Hide Splat Cloud")
                 self.btn_vis_splat_scene.setStyleSheet(
                     "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 7px; border-radius: 4px; }"
                     "QPushButton:hover { background-color: #2ecc71; }"
@@ -6814,7 +6938,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.sld_contrast.setToolTip("Scene-linear contrast power pivot around 0.18 middle-grey.")
         lay.addRow("Contrast:", self.sld_contrast)
 
-        self.btn_reset_cal = QtWidgets.QPushButton("↺ Reset Calibration to Original")
+        self.btn_reset_cal = QtWidgets.QPushButton("Reset Calibration to Original")
         self.btn_reset_cal.setToolTip("Reset EV, Black, Temp, and Tint to 0.0 and revert HDRI dome light back to original state")
         self.btn_reset_cal.setStyleSheet(
             "QPushButton { font-weight: bold; background-color: #333333; color: #e0e0e0; padding: 5px; border-radius: 4px; }"
@@ -6898,7 +7022,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay.addRow(self.chk_remove_sun)
 
         # Physical Sun Clipping Reconstruction & Atmospheric Extinction
-        self.chk_sun_reconstruct = QtWidgets.QCheckBox("☀️ Physical Sun Clipping Reconstruction")
+        self.chk_sun_reconstruct = QtWidgets.QCheckBox("Physical Sun Clipping Reconstruction")
         self.chk_sun_reconstruct.setChecked(True)
         self.chk_sun_reconstruct.setToolTip(
             "Detects if the sun was clipped during on-set HDRI bracket exposure capture.\n"
@@ -6938,7 +7062,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.lbl_sun_clipping_status.setStyleSheet("color: #aaaaaa; font-weight: bold;")
         lay.addRow("Clipping Status:", self.lbl_sun_clipping_status)
 
-        self.lbl_sun_physical_flux = QtWidgets.QLabel("Measured: — | Expected: —")
+        self.lbl_sun_physical_flux = QtWidgets.QLabel("Measured: -- | Expected: --")
         self.lbl_sun_physical_flux.setStyleSheet("color: #888888; font-size: 11px;")
         lay.addRow("Radiometry:", self.lbl_sun_physical_flux)
 
@@ -6976,7 +7100,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.lbl_sun_cct_desc.setStyleSheet("color: #00c8ff; font-style: italic;")
         lay.addRow("CCT Class:", self.lbl_sun_cct_desc)
 
-        self.btn_extract_sun = QtWidgets.QPushButton("☀️ Extract Sun Values from HDRI")
+        self.btn_extract_sun = QtWidgets.QPushButton("Extract Sun Values from HDRI")
         self.btn_extract_sun.setStyleSheet("padding: 5px; font-weight: bold;")
         self.btn_extract_sun.setToolTip(
             "Samples the sun disk in the HDRI to calculate physical Correlated Color Temperature (Kelvin)\n"
@@ -7780,7 +7904,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.txt_practicals_lg.setToolTip("Light group tag assigned to extracted Practical Rect Lights.")
         lay.addRow("Practicals Light Group:", self.txt_practicals_lg)
 
-        self.btn_setup_aovs = QtWidgets.QPushButton("️ Assign Light Groups to Stage Lights")
+        self.btn_setup_aovs = QtWidgets.QPushButton("Assign Light Groups to Stage Lights")
         self.btn_setup_aovs.setStyleSheet("padding: 6px; font-weight: bold; background: #1a3344; color: #4db8ff; border-radius: 4px;")
         self.btn_setup_aovs.setToolTip("Sets the AOV Light Group and LPE Tag parameters on all active lights in /stage for Karma, Arnold, and Redshift.")
         self.btn_setup_aovs.clicked.connect(self._apply_light_groups_to_stage)
@@ -7908,7 +8032,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_merge_networks.setVisible(False)  # Hidden as network auto-merges automatically
         lay.addWidget(self.btn_merge_networks)
 
-        self.chk_auto_bake = QtWidgets.QCheckBox("⚡ Live Viewport Sync")
+        self.chk_auto_bake = QtWidgets.QCheckBox("Live Viewport Sync")
         self.chk_auto_bake.setChecked(True)
         self.chk_auto_bake.setToolTip("Automatically bake calibrated HDRI in a background worker thread and update viewport Dome Light in real-time.")
         lay.addWidget(self.chk_auto_bake)
@@ -7940,7 +8064,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.btn_action_projection = QtWidgets.QPushButton(" Build Solaris USD Projection Mesh")
         self.btn_action_projection.setVisible(False)
 
-        self.btn_action_aovs = QtWidgets.QPushButton("️ Light Groups")
+        self.btn_action_aovs = QtWidgets.QPushButton("Light Groups")
         self.btn_action_aovs.setVisible(False)
         self.btn_action_aovs.clicked.connect(self._apply_light_groups_to_stage)
 
@@ -7961,11 +8085,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.lbl_log_status.setStyleSheet("color: #00ff88; font-size: 11px; font-weight: bold;")
         bar.addWidget(self.lbl_log_status, 1)
 
-        self.btn_reload_console = QtWidgets.QPushButton("ð Reload")
+        self.btn_reload_console = QtWidgets.QPushButton("Reload")
         self.btn_reload_console.setToolTip("Reload Python modules and refresh the tool")
         self.btn_reload_console.setStyleSheet("font-size: 10px; font-weight: bold; padding: 3px 8px; background: #1e334a; color: #00d2ff; border-radius: 3px;")
 
-        self.btn_popout_log = QtWidgets.QPushButton("ð Pop Out Window")
+        self.btn_popout_log = QtWidgets.QPushButton("Pop Out Window")
         self.btn_popout_log.setToolTip("Open separate floating debug & error window")
         self.btn_popout_log.setStyleSheet("font-size: 10px; font-weight: bold; padding: 3px 8px; background: #2b3a4a; border-radius: 3px;")
 
@@ -7983,6 +8107,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self.chk_auto_popout.setStyleSheet("font-size: 10px; color: #ffaa00;")
 
         bar.addWidget(self.btn_reload_console)
+        self.btn_reload_console.hide()
         bar.addWidget(self.btn_popout_log)
         bar.addWidget(self.btn_copy_log)
         bar.addWidget(self.btn_clear_log)
@@ -8560,10 +8685,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         legend_row = QtWidgets.QHBoxLayout()
         legend_row.setSpacing(8)
         legend_items = [
-            ("■ Floor", "#00e5ff"),
-            ("■ Ceiling", "#ffb700"),
-            ("■ 4 Corners", "#ff007f"),
-            ("┅ Horizon", "#bbbbbb"),
+            ("[Floor]", "#00e5ff"),
+            ("[Ceiling]", "#ffb700"),
+            ("[4 Corners]", "#ff007f"),
+            ("-- Horizon", "#bbbbbb"),
         ]
         for name, col in legend_items:
             lbl_leg = QtWidgets.QLabel(name)
@@ -10928,15 +11053,35 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             calibrated_path = os.path.join(out_dir, f"{base_name}_calibrated_{slot_tag}.exr").replace(chr(92), "/")
             tmp_path = os.path.join(out_dir, f"{base_name}_calibrated_tmp.exr").replace(chr(92), "/")
 
+            img_clean = np.nan_to_num(img, nan=0.0, posinf=65504.0, neginf=0.0)
+            if img_clean.ndim == 2:
+                img_clean = np.stack([img_clean] * 3, axis=-1)
+            elif img_clean.ndim == 3 and img_clean.shape[2] >= 3:
+                img_clean = img_clean[..., :3]
+            contiguous = np.ascontiguousarray(img_clean, dtype=np.float32)
+
             import OpenImageIO as oiio
             out_spec = oiio.ImageSpec(w, h, 3, oiio.HALF)
             out_spec.attribute("compression", "zip")
 
             out = oiio.ImageOutput.create(tmp_path)
             if out:
-                out.open(tmp_path, out_spec)
-                out.write_image(img.astype(np.float32))
-                out.close()
+                opened = False
+                try:
+                    opened = bool(out.open(tmp_path, out_spec))
+                    if not opened:
+                        err = out.geterror() if hasattr(out, "geterror") else (oiio.geterror() if hasattr(oiio, "geterror") else "")
+                        raise IOError(f"OpenImageIO open() failed for {tmp_path}: {err}")
+                    ok = bool(out.write_image(contiguous))
+                    if not ok:
+                        err = out.geterror() if hasattr(out, "geterror") else (oiio.geterror() if hasattr(oiio, "geterror") else "")
+                        raise IOError(f"OpenImageIO write_image() failed for {tmp_path}: {err}")
+                finally:
+                    if opened:
+                        try:
+                            out.close()
+                        except Exception:
+                            pass
 
                 # Atomically replace slot target
                 if os.path.exists(calibrated_path):
@@ -11912,88 +12057,29 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _reload_tool(self):
         """
-        Completely reload all hdri_match & solaris python modules,
-        and automatically refresh the Houdini Python Panel in-place so all
-        changes take effect instantly.
+        Save session state and inform the user cleanly.
+        Runtime module hot-reload is disabled for Solaris USD and Qt thread safety
+        under PCoIP X11 sessions.
         """
-        self.log("Action: Reload Tool initiated...", "INFO")
+        self.log("Action: Saving state prior to restart...", "INFO")
         try:
             self._save_state()
         except Exception:
             pass
-        import importlib
 
-        modules_to_reload = [
-            "hdri_match_solaris.oiio_adapter",
-            "hdri_match_solaris.drop_target",
-            "hdri_match_solaris.pipeline",
-            "hdri_match_solaris.sun_detector",
-            "hdri_match_solaris.light_extractor",
-            "hdri_match_solaris.gaussian_splat",
-            "hdri_match_solaris.lop_splat",
-            "hdri_match_solaris.panel_ui",
-            "hdri_match_solaris",
-            "CrucibleLightStudio.core.backend_houdini",
-            "CrucibleLightStudio.core.preset_manager",
-            "CrucibleLightStudio.ui.widgets.asset_library",
-            "CrucibleLightStudio.ui.widgets.light_manager",
-            "CrucibleLightStudio.ui.widgets.gradient_builder",
-            "CrucibleLightStudio.ui.main_panel",
-            "hdri_match.io.loader",
-            "hdri_match.analysis.hdri_stats",
-            "hdri_match.core.pipeline",
-            "hdri_match.core.projection",
-            "hdri_match.core.inpaint",
-            "hdri_match",
-        ]
-        _ensure_crucible_environment()
-
-        reloaded = []
-        for mod_name in modules_to_reload:
-            if mod_name in sys.modules:
-                try:
-                    importlib.reload(sys.modules[mod_name])
-                    reloaded.append(mod_name)
-                except Exception as e:
-                    self.log(f"Warning reloading {mod_name}: {e}", "WARNING")
-
-        self.log(f"Reloaded {len(reloaded)} modules: {', '.join(reloaded)}", "SUCCESS")
-
-        # In Houdini GUI, safely refresh the active pane tab via singleShot
+        msg = (
+            "Runtime module hot-reload is disabled to protect Houdini Solaris "
+            "USD caches and Qt background threads. Please restart Houdini if you "
+            "need to load newly updated files from disk."
+        )
+        self.log(msg, "WARNING")
         if hou.isUIAvailable():
-            target_interfaces = ["domebreaker_panel", "hdri_match_panel"]
-            interface_name = None
-            for iface in target_interfaces:
-                if iface in hou.pypanel.interfaces():
-                    interface_name = iface
-                    break
-            if interface_name:
-                def _do_refresh():
-                    try:
-                        interface = hou.pypanel.interfaces()[interface_name]
-                        desk = hou.ui.curDesktop()
-                        # Search docked tabs
-                        for pane in desk.paneTabs():
-                            if pane.type() == hou.paneTabType.PythonPanel:
-                                act = pane.activeInterface()
-                                if act and act.name() in target_interfaces:
-                                    pane.setActiveInterface(interface)
-                                    return
-                        # Search floating panels
-                        for fp in desk.floatingPanels():
-                            for p in fp.panes():
-                                for tab in p.tabs():
-                                    if tab.type() == hou.paneTabType.PythonPanel:
-                                        act = tab.activeInterface()
-                                        if act and act.name() in target_interfaces:
-                                            tab.setActiveInterface(interface)
-                                            return
-                    except Exception:
-                        pass
-                QtCore.QTimer.singleShot(50, _do_refresh)
-            hou.ui.setStatusMessage("DomeBreaker tool reloaded successfully.", severity=hou.severityType.Message)
+            hou.ui.setStatusMessage(
+                "DomeBreaker state saved. Restart Houdini to apply disk code updates.",
+                severity=hou.severityType.Warning,
+            )
         else:
-            print("[DomeBreaker] Tool and modules reloaded successfully.")
+            print(f"[DomeBreaker] {msg}")
 
     def _reload_modules(self):
         """Alias for _reload_tool for backward compatibility."""
@@ -12576,7 +12662,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         label_name = getattr(picker, '_label', 'Color')
         source_str = "Plate (32-bit float)" if is_plate else "Screen (linearized)"
         self.log(
-            f"[*] Sampled {label_name} from {source_str}: Raw=({r:.3f}, {g:.3f}, {b:.3f}) → Tint=({r_norm:.3f}, {g_norm:.3f}, {b_norm:.3f})",
+            f"[*] Sampled {label_name} from {source_str}: Raw=({r:.3f}, {g:.3f}, {b:.3f}) -> Tint=({r_norm:.3f}, {g_norm:.3f}, {b_norm:.3f})",
             "SUCCESS"
         )
         picker.setColor(r_norm, g_norm, b_norm)
@@ -12859,10 +12945,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def _get_stage_node(self, create=False):
         """Return the /stage LOP network, creating it only if explicitly requested."""
-        stage = hou.node("/stage")
-        if stage is None and create:
-            stage = hou.node("/obj").createNode("lopnet", "stage")
-        return stage
+        return get_or_create_solaris_stage_node(create=create)
 
     def _collect_parms(self):
         """Collect all panel parameters into a dictionary."""
@@ -13123,7 +13206,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     pane.setPwd(stage_node)
 
                 hou.ui.displayMessage(
-                    f"Created active Solaris LOP network:\n• " + "\n• ".join(created_features),
+                    f"Created active Solaris LOP network:\n- " + "\n- ".join(created_features),
                     title="DomeBreaker")
             else:
                 print(f"[HDRI Match Solaris] Native light network created: {summary_str}")
@@ -14695,11 +14778,10 @@ def _gen_calibrate_code(p):
         '',
         'calibrated = pipeline.process_hdri(use_proxy=False)',
         '',
-        'hip = hou.expandString("$HIP")',
-        'out_dir = os.path.join(hip, "hdri_match")',
-        'os.makedirs(out_dir, exist_ok=True)',
+        'from hdri_match_solaris.usd_helpers import resolve_workspace_dir',
+        'out_dir = resolve_workspace_dir("hdri_match")',
         'base = os.path.splitext(os.path.basename(hdri_path))[0]',
-        'output_path = os.path.join(out_dir, base + "_calibrated.exr")',
+        'output_path = os.path.join(out_dir, base + "_calibrated.exr").replace("\\\\", "/")',
         'save_numpy_to_image(calibrated, output_path)',
         'print("[HDRI Match] Calibrated HDRI ->", output_path)',
         '',
@@ -14710,29 +14792,28 @@ def _gen_calibrate_code(p):
         'dome = UsdLux.DomeLight.Define(stage, "/lights/hdri_dome")',
         'dome.CreateTextureFileAttr().Set(output_path.replace(chr(92), "/"))',
         'dome.CreateTextureFormatAttr().Set("latlong")',
-        'dome.CreateExposureAttr().Set(float(pipeline.state.ev_offset))',
+        '# Baked calibration: process_hdri() already applied ev_offset, temperature, tint, and hdri_yaw',
+        'dome.CreateExposureAttr().Set(0.0)',
+        'dome.CreateColorAttr().Set(Gf.Vec3f(1.0, 1.0, 1.0))',
+        'xfm = UsdGeom.Xformable(dome.GetPrim())',
+        'xfm.ClearXformOpOrder()',
         '',
-        'if abs({0}) > 0.01:'.format(p["yaw"]),
-        '    xfm = UsdGeom.Xformable(dome.GetPrim())',
-        '    xfm.ClearXformOpOrder()',
-        '    xfm.AddRotateYOp(UsdGeom.XformOp.PrecisionFloat).Set('
-        'float({0}))'.format(p["yaw"]),
-        '',
-        '# Store metadata',
+        '# Store metadata (computed values + baked_in_texture flag)',
         'ns = "hdriMatch"',
         'for k, v in {"ev_offset": float(pipeline.state.ev_offset),',
         '              "temperature": float(pipeline.state.temperature),',
         '              "tint": float(pipeline.state.tint),',
         '              "hdri_yaw": float(pipeline.state.hdri_yaw),',
+        '              "baked_in_texture": True,',
         '              "calibrated_path": output_path,',
         '              "source_hdri": hdri_path}.items():',
         '    attr_name = ns + ":" + k',
-        '    if isinstance(v, float):',
-        '        dome.GetPrim().CreateAttribute('
-        'attr_name, Sdf.ValueTypeNames.Float).Set(v)',
+        '    if isinstance(v, bool):',
+        '        dome.GetPrim().CreateAttribute(attr_name, Sdf.ValueTypeNames.Bool).Set(v)',
+        '    elif isinstance(v, float):',
+        '        dome.GetPrim().CreateAttribute(attr_name, Sdf.ValueTypeNames.Float).Set(v)',
         '    elif isinstance(v, str):',
-        '        dome.GetPrim().CreateAttribute('
-        'attr_name, Sdf.ValueTypeNames.String).Set(v)',
+        '        dome.GetPrim().CreateAttribute(attr_name, Sdf.ValueTypeNames.String).Set(v)',
         '',
         'print("[HDRI Match] DomeLight created at /lights/hdri_dome")',
     ]
@@ -15523,7 +15604,9 @@ def _gen_ground_projection_code(p):
             'import hou',
             'from pxr import Usd, UsdGeom, UsdShade, Gf, Vt, Sdf',
             '',
-            'for cand in [os.environ.get("HDRI_MATCH_PLATE_ROOT", ""), "E:/PROJECTS/HDRI_Match_Plate", "e:/PROJECTS/HDRI_Match_Plate"]:',
+            '_db_root = os.environ.get("DOMEBREAKER_ROOT", "")',
+            '_db_py = os.path.join(_db_root, "python") if _db_root else ""',
+            'for cand in [os.environ.get("HDRI_MATCH_PLATE_ROOT", ""), _db_py]:',
             '    if cand and os.path.isdir(cand) and cand not in sys.path:',
             '        sys.path.insert(0, cand)',
             'try:',
@@ -15942,7 +16025,9 @@ def _gen_ground_projection_code(p):
         'import hou',
         'from pxr import Usd, UsdGeom, UsdShade, Gf, Vt, Sdf',
         '',
-        'for cand in [os.environ.get("HDRI_MATCH_PLATE_ROOT", ""), "E:/PROJECTS/HDRI_Match_Plate", "e:/PROJECTS/HDRI_Match_Plate"]:',
+        '_db_root = os.environ.get("DOMEBREAKER_ROOT", "")',
+        '_db_py = os.path.join(_db_root, "python") if _db_root else ""',
+        'for cand in [os.environ.get("HDRI_MATCH_PLATE_ROOT", ""), _db_py]:',
         '    if cand and os.path.isdir(cand) and cand not in sys.path:',
         '        sys.path.insert(0, cand)',
         'try:',

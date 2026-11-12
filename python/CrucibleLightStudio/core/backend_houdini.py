@@ -298,7 +298,8 @@ class HoudiniBackend(DCCBackend):
                                 pass
                         break
                 if not stage:
-                    stage = hou.node("/obj/stage") or hou.node("/obj").createNode("lopnet", "stage")
+                    from hdri_match_solaris.usd_helpers import get_or_create_solaris_stage_node
+                    stage = get_or_create_solaris_stage_node(create=True)
                 node = stage.createNode("crucible_light_studio", "crucible_light_studio")
                 _splice_into_stage_stream(node, stage)
                 node.moveToGoodPosition()

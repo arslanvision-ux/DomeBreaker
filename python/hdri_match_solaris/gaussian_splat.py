@@ -1392,12 +1392,21 @@ class GaussianSplatBaker:
 
     @staticmethod
     def save_exr(image_array, output_path, compression="zip", pixel_type="float"):
-        """Write true 32-bit float (or 16-bit half) OpenEXR image via OpenImageIO or OpenCV fallback."""
-        h, w = image_array.shape[:2]
+        """Write true 32-bit float (or 16-bit half) OpenEXR image via OpenImageIO or safe standalone fallback."""
+        arr = np.asarray(image_array, dtype=np.float32)
+        if arr.ndim == 2:
+            arr = np.stack([arr] * 3, axis=-1)
+        elif arr.ndim == 3 and arr.shape[2] > 3:
+            arr = arr[..., :3]
+        h, w = arr.shape[:2]
+        clean = np.nan_to_num(arr, nan=0.0, posinf=65504.0, neginf=0.0)
+        contiguous = np.ascontiguousarray(clean, dtype=np.float32)
+
         output_dir = os.path.dirname(output_path)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
 
+        oiio_err = None
         try:
             import OpenImageIO as oiio
             ptype = oiio.FLOAT if pixel_type == "float" else oiio.HALF
@@ -1405,53 +1414,68 @@ class GaussianSplatBaker:
             spec.attribute("compression", compression)
             spec.attribute("openexr:roundingmode", 0)
             out = oiio.ImageOutput.create(output_path)
-            if out:
-                out.open(output_path, spec)
-                out.write_image(image_array.astype(np.float32))
-                out.close()
+            if not out:
+                raise IOError(f"ImageOutput.create failed: {oiio.geterror()}")
+            opened = False
+            try:
+                opened = bool(out.open(output_path, spec))
+                if not opened:
+                    raise IOError(f"open() failed: {out.geterror() if hasattr(out, 'geterror') else oiio.geterror()}")
+                if not bool(out.write_image(contiguous)):
+                    raise IOError(f"write_image() failed: {out.geterror() if hasattr(out, 'geterror') else oiio.geterror()}")
                 return output_path
+            finally:
+                if opened:
+                    out.close()
         except Exception as e:
-            print(f"[GaussianSplatBaker] OIIO write warning: {e}, attempting cv2...")
+            oiio_err = e
+            print(f"[GaussianSplatBaker] OIIO write warning: {e}")
 
-        try:
-            import cv2
-            bgr = cv2.cvtColor(image_array.astype(np.float32), cv2.COLOR_RGB2BGR)
-            cv2.imwrite(output_path, bgr)
-            return output_path
-        except Exception as e:
-            raise RuntimeError(f"Failed to write EXR file to {output_path}: {e}")
+        if "hou" not in sys.modules:
+            try:
+                import cv2
+                bgr = cv2.cvtColor(contiguous, cv2.COLOR_RGB2BGR)
+                if cv2.imwrite(output_path, bgr):
+                    return output_path
+            except Exception as e:
+                oiio_err = e
+
+        raise RuntimeError(f"Failed to write EXR file to {output_path}: {oiio_err}")
 
     @staticmethod
     def load_exr(file_path):
-        """Read 32-bit float OpenEXR image via OpenImageIO or OpenCV fallback into (H, W, 3) float32 RGB array."""
+        """Read 32-bit float OpenEXR image via OpenImageIO into (H, W, 3) float32 RGB array."""
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"EXR file not found: {file_path}")
         try:
             import OpenImageIO as oiio
             inp = oiio.ImageInput.open(file_path)
             if inp:
-                arr = inp.read_image(format=oiio.FLOAT)
-                inp.close()
+                try:
+                    arr = inp.read_image(format=oiio.FLOAT)
+                finally:
+                    inp.close()
                 if arr is not None:
                     if arr.ndim == 2:
-                        arr = np.stack([arr]*3, axis=-1)
+                        arr = np.stack([arr] * 3, axis=-1)
                     elif arr.shape[2] > 3:
                         arr = arr[:, :, :3]
-                    return arr.astype(np.float32)
+                    return np.ascontiguousarray(arr, dtype=np.float32)
         except Exception:
             pass
 
-        try:
-            import cv2
-            bgr = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
-            if bgr is not None:
-                if bgr.ndim == 2:
-                    rgb = np.stack([bgr]*3, axis=-1)
-                else:
-                    rgb = cv2.cvtColor(bgr[:, :, :3], cv2.COLOR_BGR2RGB)
-                return rgb.astype(np.float32)
-        except Exception:
-            pass
+        if "hou" not in sys.modules:
+            try:
+                import cv2
+                bgr = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
+                if bgr is not None:
+                    if bgr.ndim == 2:
+                        rgb = np.stack([bgr] * 3, axis=-1)
+                    else:
+                        rgb = cv2.cvtColor(bgr[:, :, :3], cv2.COLOR_BGR2RGB)
+                    return np.ascontiguousarray(rgb, dtype=np.float32)
+            except Exception:
+                pass
         return None
 
     @staticmethod

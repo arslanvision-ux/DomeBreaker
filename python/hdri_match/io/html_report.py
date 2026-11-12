@@ -1,54 +1,78 @@
 import os
+import sys
+import io
 import base64
 import numpy as np
+
+
+def _safe_get_cv2():
+    """Return cv2 only outside Houdini to prevent Qt/X11/OpenCL ABI conflicts."""
+    if "hou" in sys.modules:
+        return None
+    try:
+        import cv2
+        return cv2
+    except ImportError:
+        return None
+
+
+def _encode_image_bytes(u8_rgb: np.ndarray, fmt: str, quality: int = 80) -> bytes:
+    """Encode an uint8 RGB image array to JPEG/PNG bytes without requiring cv2 inside Houdini."""
+    try:
+        from PIL import Image
+        buf = io.BytesIO()
+        pil_img = Image.fromarray(np.ascontiguousarray(u8_rgb))
+        save_kwargs = {"quality": int(quality)} if fmt.upper() == "JPEG" else {}
+        pil_img.save(buf, format=fmt.upper(), **save_kwargs)
+        return buf.getvalue()
+    except ImportError:
+        pass
+
+    cv2 = _safe_get_cv2()
+    if cv2 is not None:
+        arr = u8_rgb
+        if arr.ndim == 3 and arr.shape[2] == 3:
+            arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        ext = ".jpg" if fmt.upper() == "JPEG" else ".png"
+        params = [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)] if ext == ".jpg" else []
+        success, encoded = cv2.imencode(ext, arr, params)
+        if success:
+            return encoded.tobytes()
+
+    raise RuntimeError("Neither PIL nor safe OpenCV backend is available to encode report images.")
+
 
 def array_to_base64_jpg(img_array: np.ndarray, quality: int = 80) -> str:
     """Convert a float32 linear numpy array to a base64 encoded sRGB JPEG string."""
     if img_array is None:
         return ""
-    
+
     try:
-        import cv2
-        # Apply sRGB gamma curve for display in HTML
         srgb = np.power(np.clip(img_array, 0.0, 1.0), 1.0 / 2.2)
-        # Convert to 8-bit
         u8 = (srgb * 255.0).astype(np.uint8)
-        
-        # BGR to RGB if 3 channels
-        if u8.ndim == 3 and u8.shape[2] == 3:
-            u8 = cv2.cvtColor(u8, cv2.COLOR_BGR2RGB)
-            
-        success, encoded_image = cv2.imencode('.jpg', u8, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-        if success:
-            b64_str = base64.b64encode(encoded_image).decode('utf-8')
-            return f"data:image/jpeg;base64,{b64_str}"
-    except ImportError:
-        pass
+        encoded_bytes = _encode_image_bytes(u8, "JPEG", quality=quality)
+        b64_str = base64.b64encode(encoded_bytes).decode('utf-8')
+        return f"data:image/jpeg;base64,{b64_str}"
     except Exception as e:
         print(f"Error converting image to base64: {e}")
-        
+
     return ""
+
 
 def array_to_base64_png(img_array: np.ndarray) -> str:
     """Convert a float32 linear numpy array to a base64 encoded sRGB PNG string."""
     if img_array is None:
         return ""
-    
+
     try:
-        import cv2
         srgb = np.power(np.clip(img_array, 0.0, 1.0), 1.0 / 2.2)
         u8 = (srgb * 255.0).astype(np.uint8)
-        
-        if u8.ndim == 3 and u8.shape[2] == 3:
-            u8 = cv2.cvtColor(u8, cv2.COLOR_BGR2RGB)
-            
-        success, encoded_image = cv2.imencode('.png', u8)
-        if success:
-            b64_str = base64.b64encode(encoded_image).decode('utf-8')
-            return f"data:image/png;base64,{b64_str}"
+        encoded_bytes = _encode_image_bytes(u8, "PNG")
+        b64_str = base64.b64encode(encoded_bytes).decode('utf-8')
+        return f"data:image/png;base64,{b64_str}"
     except Exception:
         pass
-        
+
     return ""
 
 def extract_exr_metadata(path):
@@ -92,7 +116,6 @@ def generate_html_report(state, output_path: str):
     fc_b64 = ""
     if state.hdri_proxy is not None:
         try:
-            import cv2
             hdri_for_fc = state.calibrated_proxy if state.calibrated_proxy is not None else state.hdri_proxy
             # Simple false color mapping based on luminance
             luma = 0.2126 * hdri_for_fc[..., 0] + 0.7152 * hdri_for_fc[..., 1] + 0.0722 * hdri_for_fc[..., 2]

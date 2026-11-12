@@ -44,15 +44,24 @@ def load_image_with_oiio(file_path: str) -> np.ndarray:
 
 
 def save_image_with_oiio(image_array: np.ndarray, file_path: str):
-    """Save a float32 RGB image array using OpenImageIO."""
+    """Save a float32 RGB image array using OpenImageIO with strict fail-closed checks."""
     if not HAS_OIIO:
         raise ImportError("OpenImageIO is not available.")
 
-    if image_array.ndim < 3:
-        raise ValueError("Expected a 3-channel (H, W, 3) array.")
-    h, w, c = image_array.shape
-    if c != 3:
-        raise ValueError("Only 3-channel RGB arrays are supported.")
+    arr = np.asarray(image_array, dtype=np.float32)
+    if arr.ndim == 2:
+        arr = np.stack([arr] * 3, axis=-1)
+    elif arr.ndim != 3:
+        raise ValueError(f"Expected a 2D or 3D image array, got shape {arr.shape}.")
+
+    if arr.shape[2] >= 3:
+        arr = arr[..., :3]
+    else:
+        raise ValueError(f"Expected at least 3 channels (RGB), got shape {arr.shape}.")
+
+    h, w, _ = arr.shape
+    clean = np.nan_to_num(arr, nan=0.0, posinf=65504.0, neginf=0.0)
+    contiguous = np.ascontiguousarray(clean, dtype=np.float32)
 
     out_dir = os.path.dirname(os.path.abspath(file_path))
     if out_dir:
@@ -63,12 +72,20 @@ def save_image_with_oiio(image_array: np.ndarray, file_path: str):
     if not out:
         raise IOError(f"OpenImageIO could not create output for '{file_path}': {oiio.geterror()}")
 
+    opened = False
     try:
-        out.open(file_path, spec)
-        contiguous = np.ascontiguousarray(image_array, dtype=np.float32)
-        out.write_image(contiguous)
+        opened = bool(out.open(file_path, spec))
+        if not opened:
+            err = out.geterror() if hasattr(out, "geterror") else oiio.geterror()
+            raise IOError(f"OpenImageIO failed to open '{file_path}' for writing: {err}")
+
+        ok = bool(out.write_image(contiguous))
+        if not ok:
+            err = out.geterror() if hasattr(out, "geterror") else oiio.geterror()
+            raise IOError(f"OpenImageIO failed to write pixels to '{file_path}': {err}")
     finally:
-        out.close()
+        if opened:
+            out.close()
 
 
 def install_adapter():

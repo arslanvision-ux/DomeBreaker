@@ -34,30 +34,32 @@ def cook(node):
     # ------------------------------------------------------------------
     # 1. Read parameters
     # ------------------------------------------------------------------
-    hdri_path = hou.expandString(node.parm("hdri_path").eval()) if node.parm("hdri_path") else ""
-    auto_detect = node.parm("auto_detect").eval() if node.parm("auto_detect") else True
+    raw_hdri = node.parm("hdri_path").eval() if node.parm("hdri_path") else ""
+    hdri_path = hou.expandString(str(raw_hdri or ""))
+    auto_detect = bool(node.parm("auto_detect").eval()) if node.parm("auto_detect") else True
 
     # Source sun position (normalised UV, 0-1)
-    source_u = node.parm("source_u").eval() if node.parm("source_u") else 0.5
-    source_v = node.parm("source_v").eval() if node.parm("source_v") else 0.25
+    source_u = float(node.parm("source_u").eval()) if node.parm("source_u") else 0.5
+    source_v = float(node.parm("source_v").eval()) if node.parm("source_v") else 0.25
 
     # Target sun position (normalised UV, 0-1)
-    target_u = node.parm("target_u").eval() if node.parm("target_u") else 0.5
-    target_v = node.parm("target_v").eval() if node.parm("target_v") else 0.25
+    target_u = float(node.parm("target_u").eval()) if node.parm("target_u") else 0.5
+    target_v = float(node.parm("target_v").eval()) if node.parm("target_v") else 0.25
 
     # Extraction parameters
-    sun_radius = node.parm("sun_radius").eval() if node.parm("sun_radius") else 0.03
-    sun_feather = node.parm("sun_feather").eval() if node.parm("sun_feather") else 0.015
+    sun_radius = float(node.parm("sun_radius").eval()) if node.parm("sun_radius") else 0.03
+    sun_feather = float(node.parm("sun_feather").eval()) if node.parm("sun_feather") else 0.015
 
     # Sun light parameters
-    sun_intensity = node.parm("sun_intensity").eval() if node.parm("sun_intensity") else 1.0
-    sun_exposure = node.parm("sun_exposure").eval() if node.parm("sun_exposure") else 0.0
-    sun_angle = node.parm("sun_angle").eval() if node.parm("sun_angle") else 0.53
+    sun_intensity = float(node.parm("sun_intensity").eval()) if node.parm("sun_intensity") else 1.0
+    sun_exposure = float(node.parm("sun_exposure").eval()) if node.parm("sun_exposure") else 0.0
+    sun_angle = float(node.parm("sun_angle").eval()) if node.parm("sun_angle") else 0.53
 
-    enable_relight = node.parm("enable_relight").eval() if node.parm("enable_relight") else True
-    create_distant = node.parm("create_distant_light").eval() if node.parm("create_distant_light") else True
+    enable_relight = bool(node.parm("enable_relight").eval()) if node.parm("enable_relight") else True
+    create_distant = bool(node.parm("create_distant_light").eval()) if node.parm("create_distant_light") else True
 
-    output_path = hou.expandString(node.parm("output_path").eval()) if node.parm("output_path") else ""
+    raw_out = node.parm("output_path").eval() if node.parm("output_path") else ""
+    output_path = hou.expandString(str(raw_out or ""))
 
     # ------------------------------------------------------------------
     # 2. Try to inherit HDRI path from upstream calibration metadata
@@ -93,12 +95,7 @@ def cook(node):
             from hdri_match.calibration.sun_detection import SunDetector
             result = SunDetector.detect_sun(hdri_array)
             if result is not None:
-                source_u, source_v = result[0], result[1]
-                # Push detected values back to parms for display
-                if node.parm("source_u"):
-                    node.parm("source_u").set(source_u)
-                if node.parm("source_v"):
-                    node.parm("source_v").set(source_v)
+                source_u, source_v = float(result[0]), float(result[1])
                 print(f"[Sun] Auto-detected sun at UV=({source_u:.4f}, {source_v:.4f})")
         except Exception as e:
             print(f"[Sun] Auto-detection failed: {e}. Using manual values.")
@@ -156,11 +153,11 @@ def cook(node):
     # 7. Write the relit HDRI to disk
     # ------------------------------------------------------------------
     if not output_path:
-        hip = hou.expandString("$HIP")
-        out_dir = os.path.join(hip, "hdri_match")
+        from hdri_match_solaris.usd_helpers import resolve_workspace_dir
+        out_dir = resolve_workspace_dir("hdri_match")
         os.makedirs(out_dir, exist_ok=True)
         base = os.path.splitext(os.path.basename(hdri_path))[0]
-        output_path = os.path.join(out_dir, f"{base}_sun_relit.exr")
+        output_path = os.path.join(out_dir, f"{base}_sun_relit.exr").replace("\\", "/")
 
     try:
         from hdri_match.io.exporter import save_numpy_to_image

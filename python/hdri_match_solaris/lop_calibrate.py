@@ -40,8 +40,8 @@ def cook(node):
     from hdri_match_solaris.hda_utils import read_calibration_parms, build_output_path
 
     parms = read_calibration_parms(node)
-    hdri_path = hou.expandString(parms["hdri_path"])
-    plate_path = hou.expandString(parms["plate_path"])
+    hdri_path = hou.expandString(str(parms.get("hdri_path") or ""))
+    plate_path = hou.expandString(str(parms.get("plate_path") or ""))
 
     if not hdri_path or not os.path.isfile(hdri_path):
         raise hou.NodeError(f"HDRI file not found: {hdri_path}")
@@ -88,18 +88,17 @@ def cook(node):
             pipeline.compute_calibration(
                 protect_sun=parms["protect_sun"]
             )
-            # Push computed values back to HDA parms for display
-            from hdri_match_solaris.hda_utils import sync_pipeline_to_parms
-            sync_pipeline_to_parms(node, pipeline)
         except Exception as e:
-            hou.ui.displayMessage(
-                f"Auto-calibration warning: {e}\n\n"
-                "Proceeding with manual parameter values.",
-                severity=hou.severityType.Warning
-            )
+            msg = f"Auto-calibration warning: {e}. Proceeding with manual parameter values."
+            print(f"[HDRI Match Solaris] {msg}")
+            if hasattr(node, "addWarning"):
+                try:
+                    node.addWarning(msg)
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
-    # 6. Process the HDRI through the full pipeline
+    # 6. Process the HDRI through the full pipeline (bakes EV/WB/Yaw into EXR)
     # ------------------------------------------------------------------
     try:
         calibrated = pipeline.process_hdri(use_proxy=False)
@@ -120,7 +119,7 @@ def cook(node):
         raise hou.NodeError(f"Failed to write calibrated EXR: {e}")
 
     # ------------------------------------------------------------------
-    # 8. Create/update DomeLight on the USD stage
+    # 8. Create/update DomeLight on the USD stage (neutral transforms; baked in EXR)
     # ------------------------------------------------------------------
     from hdri_match_solaris.usd_helpers import (
         set_dome_light, write_calibration_metadata, ensure_scope
@@ -129,33 +128,25 @@ def cook(node):
     ensure_scope(stage, "/lights")
     dome_path = "/lights/hdri_dome"
 
-    # Compute WB colour multiplier for the DomeLight
-    temp = parms["temperature"]
-    tint_val = parms["tint"]
-    r_scale = max(0.01, 1.0 + temp + tint_val)
-    g_scale = max(0.01, 1.0 - tint_val)
-    b_scale = max(0.01, 1.0 - temp)
-    lum = (r_scale + g_scale + b_scale) / 3.0
-    wb_color = (r_scale / lum, g_scale / lum, b_scale / lum)
-
     dome = set_dome_light(
         stage, dome_path,
         texture_path=output_path.replace("\\", "/"),
-        exposure=parms["ev_offset"],
-        color=wb_color,
-        yaw_degrees=parms["hdri_yaw"],
+        exposure=0.0,
+        color=(1.0, 1.0, 1.0),
+        yaw_degrees=0.0,
     )
 
-    # Store calibration metadata on the DomeLight prim
+    # Store computed calibration metadata on the DomeLight prim
     write_calibration_metadata(dome.GetPrim(), {
-        "ev_offset": float(parms["ev_offset"]),
-        "black_offset": float(parms["black_offset"]),
-        "temperature": float(parms["temperature"]),
-        "tint": float(parms["tint"]),
-        "hdri_yaw": float(parms["hdri_yaw"]),
+        "ev_offset": float(pipeline.state.ev_offset),
+        "black_offset": float(pipeline.state.black_offset),
+        "temperature": float(pipeline.state.temperature),
+        "tint": float(pipeline.state.tint),
+        "hdri_yaw": float(pipeline.state.hdri_yaw),
+        "baked_in_texture": True,
         "source_hdri": hdri_path,
         "source_plate": plate_path or "",
         "calibrated_path": output_path,
     })
 
-    print(f"[HDRI Match Solaris] DomeLight created at {dome_path}")
+    print(f"[HDRI Match Solaris] DomeLight created at {dome_path}")

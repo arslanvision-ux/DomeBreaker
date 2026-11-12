@@ -1,10 +1,10 @@
 import os
 import math
 import sys
-if "PySide2" in sys.modules:
-    from PySide2 import QtWidgets, QtCore, QtGui
-else:
+try:
     from PySide6 import QtWidgets, QtCore, QtGui
+except ImportError:
+    from PySide2 import QtWidgets, QtCore, QtGui
     
 from CrucibleLightStudio.core import preset_manager
 

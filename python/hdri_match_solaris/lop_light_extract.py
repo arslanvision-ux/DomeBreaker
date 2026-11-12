@@ -35,12 +35,13 @@ def cook(node):
     # ------------------------------------------------------------------
     # Read parameters
     # ------------------------------------------------------------------
-    hdri_path = hou.expandString(node.parm("hdri_path").eval()) if node.parm("hdri_path") else ""
-    max_lights = node.parm("max_lights").eval() if node.parm("max_lights") else 8
-    threshold_ev = node.parm("threshold_ev").eval() if node.parm("threshold_ev") else 3.0
-    min_angular_size = node.parm("min_angular_size").eval() if node.parm("min_angular_size") else 0.5
-    light_distance = node.parm("light_distance").eval() if node.parm("light_distance") else 100.0
-    sun_as_distant = node.parm("sun_as_distant").eval() if node.parm("sun_as_distant") else True
+    raw_hdri = node.parm("hdri_path").eval() if node.parm("hdri_path") else ""
+    hdri_path = hou.expandString(str(raw_hdri or ""))
+    max_lights = int(node.parm("max_lights").eval()) if node.parm("max_lights") else 8
+    threshold_ev = float(node.parm("threshold_ev").eval()) if node.parm("threshold_ev") else 3.0
+    min_angular_size = float(node.parm("min_angular_size").eval()) if node.parm("min_angular_size") else 0.5
+    light_distance = float(node.parm("light_distance").eval()) if node.parm("light_distance") else 100.0
+    sun_as_distant = bool(node.parm("sun_as_distant").eval()) if node.parm("sun_as_distant") else True
 
     # ------------------------------------------------------------------
     # Inherit HDRI path from upstream calibration metadata
@@ -85,6 +86,13 @@ def cook(node):
     except Exception as e:
         raise hou.NodeError(f"Light extraction failed: {e}")
 
+    # Clear stale /lights/extracted children first so reduced max_lights or schema switches never leave ghosts
+    ensure_scope(stage, "/lights")
+    extracted_prim = stage.GetPrimAtPath("/lights/extracted")
+    if extracted_prim.IsValid():
+        for child in list(extracted_prim.GetChildren()):
+            stage.RemovePrim(child.GetPath())
+
     if not lights:
         print("[Light Extract] No significant light emitters found in the HDRI.")
         return
@@ -92,7 +100,6 @@ def cook(node):
     # ------------------------------------------------------------------
     # Create USD light prims
     # ------------------------------------------------------------------
-    ensure_scope(stage, "/lights")
     ensure_scope(stage, "/lights/extracted")
 
     for i, light in enumerate(lights):
@@ -157,50 +164,102 @@ def _spherical_to_cartesian(az_deg, el_deg):
 
 
 def _fallback_extract_lights(hdri_array, max_lights=8, threshold_ev=3.0):
-    """Simple peak-based light extraction fallback.
+    """Peak-based light extraction fallback in pure NumPy (no cv2).
 
-    Uses luminance thresholding and connected component analysis to find
-    bright emitters when the full ``LightExtractor`` is not available.
+    Uses luminance thresholding, downsampled horizontal-wrapping 8-connected
+    components BFS, and sin(theta) solid-angle weighting for equirectangular
+    HDRIs so polar distortion and u=0/u=1 seam splits are avoided.
     """
-    import cv2
+    from collections import deque
 
     h, w = hdri_array.shape[:2]
-    luma = (0.2126 * hdri_array[..., 0] +
-            0.7152 * hdri_array[..., 1] +
-            0.0722 * hdri_array[..., 2])
+    # Downsample to manageable working grid if very large so pure-Python BFS is instant
+    max_work_w = 512
+    if w > max_work_w:
+        step = max(1, w // max_work_w)
+        work = hdri_array[::step, ::step, :3]
+    else:
+        work = hdri_array[..., :3]
 
-    # Threshold at mid-grey * 2^threshold_ev
-    threshold = 0.18 * (2.0 ** threshold_ev)
-    mask = (luma > threshold).astype(np.uint8)
+    wh, ww = work.shape[:2]
+    luma = 0.2126 * work[..., 0] + 0.7152 * work[..., 1] + 0.0722 * work[..., 2]
 
-    # Connected components
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-        mask, connectivity=8)
+    threshold = 0.18 * (2.0 ** float(threshold_ev))
+    active = luma > threshold
+    if not np.any(active):
+        return []
 
+    # Solid-angle row weights: sin(colatitude) = sin(pi * (y + 0.5) / wh)
+    row_theta = math.pi * (np.arange(wh, dtype=np.float32) + 0.5) / float(wh)
+    sin_theta = np.maximum(np.sin(row_theta), 1e-4)
+    dtheta = math.pi / float(wh)
+    dphi = (2.0 * math.pi) / float(ww)
+    total_sphere_area = 4.0 * math.pi
+
+    visited = np.zeros((wh, ww), dtype=bool)
+    ys, xs = np.nonzero(active)
     lights = []
-    for label_id in range(1, num_labels):
-        area = stats[label_id, cv2.CC_STAT_AREA]
-        if area < 4:
+
+    for sy, sx in zip(ys.tolist(), xs.tolist()):
+        if visited[sy, sx]:
+            continue
+        # Iterative 8-connected BFS wrapping horizontally across seam
+        visited[sy, sx] = True
+        queue = deque([(sy, sx)])
+        comp_y = []
+        comp_x = []
+        while queue:
+            cy, cx = queue.popleft()
+            comp_y.append(cy)
+            comp_x.append(cx)
+            for dy in (-1, 0, 1):
+                ny = cy + dy
+                if ny < 0 or ny >= wh:
+                    continue
+                for dx in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    nx = (cx + dx) % ww
+                    if active[ny, nx] and not visited[ny, nx]:
+                        visited[ny, nx] = True
+                        queue.append((ny, nx))
+
+        if len(comp_y) < 2 and max(w, h) > 64:
             continue
 
-        cx, cy = centroids[label_id]
-        u = cx / w
-        v = cy / h
+        iy = np.array(comp_y, dtype=np.int64)
+        ix = np.array(comp_x, dtype=np.int64)
+        pix_rgb = work[iy, ix]
+        pix_luma = luma[iy, ix]
+        pix_omega = sin_theta[iy] * dtheta * dphi
+        omega_sum = float(np.sum(pix_omega))
+        if omega_sum <= 1e-9:
+            continue
 
-        # Sample colour
-        region_mask = (labels == label_id)
-        region_pixels = hdri_array[region_mask]
-        mean_color = np.mean(region_pixels, axis=0)
-        mean_luma = float(0.2126 * mean_color[0] + 0.7152 * mean_color[1] +
-                          0.0722 * mean_color[2])
+        weights = pix_luma * pix_omega
+        w_sum = float(np.sum(weights))
+        if w_sum <= 1e-9:
+            continue
 
+        # Seam-safe circular azimuth centroid
+        phi = (ix.astype(np.float32) + 0.5) / float(ww) * (2.0 * math.pi) - math.pi
+        mean_phi = math.atan2(
+            float(np.sum(weights * np.sin(phi))),
+            float(np.sum(weights * np.cos(phi))),
+        )
+        u = ((mean_phi + math.pi) / (2.0 * math.pi)) % 1.0
+        v = float(np.sum(weights * ((iy.astype(np.float32) + 0.5) / float(wh))) / w_sum)
+
+        # Solid-angle weighted mean radiance
+        weighted_rgb = np.sum(pix_rgb * pix_omega[:, None], axis=0) / omega_sum
+        mean_luma = float(0.2126 * weighted_rgb[0] + 0.7152 * weighted_rgb[1] + 0.0722 * weighted_rgb[2])
         if mean_luma < 1e-6:
             continue
 
-        color_norm = mean_color / mean_luma
-
-        # Angular size from pixel area
-        angular_size = math.degrees(2.0 * math.sqrt(area / math.pi) / w * math.pi)
+        color_norm = weighted_rgb / mean_luma
+        # Solid-angle angular diameter: omega = 2 * pi * (1 - cos(half_angle))
+        cos_half = max(-1.0, min(1.0, 1.0 - min(omega_sum, total_sphere_area) / (2.0 * math.pi)))
+        angular_size = max(0.5, math.degrees(2.0 * math.acos(cos_half)))
 
         lights.append({
             "name": f"emitter_{len(lights):02d}",
@@ -211,6 +270,5 @@ def _fallback_extract_lights(hdri_array, max_lights=8, threshold_ev=3.0):
             "angular_size_deg": float(angular_size),
         })
 
-    # Sort by intensity descending
     lights.sort(key=lambda x: x["intensity"], reverse=True)
     return lights[:max_lights]

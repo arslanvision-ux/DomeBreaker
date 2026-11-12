@@ -625,11 +625,8 @@ class SplatForgeTab(QtWidgets.QWidget):
                 except Exception:
                     stage_node = None
             if stage_node is None:
-                stage_node = hou.node("/stage")
-                if stage_node is None:
-                    obj = hou.node("/obj")
-                    if obj:
-                        stage_node = obj.createNode("lopnet", "stage")
+                from hdri_match_solaris.usd_helpers import get_or_create_solaris_stage_node
+                stage_node = get_or_create_solaris_stage_node(create=True)
 
             from hdri_match_solaris.splatforge.solaris.scene_builder import assemble_splatforge_scene
 
