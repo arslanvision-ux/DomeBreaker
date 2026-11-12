@@ -65,12 +65,14 @@ def cook(node):
     pipeline = CalibrationPipeline()
 
     input_cs = parms["input_colorspace"]
+    plate_cs = parms.get("plate_colorspace", "Auto")
     working_cs = parms["working_colorspace"]
 
     try:
         pipeline.load_inputs(hdri_path, plate_path,
                              input_space=input_cs,
-                             working_space=working_cs)
+                             working_space=working_cs,
+                             plate_space=plate_cs)
     except Exception as e:
         raise hou.NodeError(f"Failed to load images: {e}")
 

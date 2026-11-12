@@ -855,9 +855,12 @@ class CalibrationPipeline:
             self.state.cg_beauty_proxy = _resize(self.state.cg_beauty)
 
     def load_inputs(self, hdri_path: str, plate_path: str,
-                    input_space: str = "Linear", working_space: str = "Linear"):
+                    input_space: str = "Linear", working_space: str = "Linear",
+                    plate_space: str = None):
         self.state.hdri_path = hdri_path
         self.state.plate_path = plate_path
+        self.state.input_colorspace = input_space or "Linear"
+        self.state.working_colorspace = working_space or "Linear"
 
         errors = []
         if hdri_path:
@@ -875,20 +878,20 @@ class CalibrationPipeline:
             try:
                 plate_raw = load_exr_to_numpy(plate_path)
                 ext = os.path.splitext(plate_path)[1].lower()
-                # Detect display-referred formats (JPG, PNG, TIFF 8-bit, BMP)
-                # These are sRGB gamma-encoded. The loader already normalises to
-                # 0-1 but does NOT linearize. We must remove the sRGB gamma so
-                # that all EV and illuminant math operates in scene-linear space.
-                if ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tga', '.tif', '.tiff'):
-                    self.state.plate_is_display_referred = True
-                    # Approximate sRGB → Linear (gamma 2.2 decode)
-                    plate_raw = np.power(np.clip(plate_raw, 0.0, 1.0), 2.2)
-                    print(f"[Pipeline] Plate '{os.path.basename(plate_path)}' detected as display-referred ({ext}).")
-                    print(f"           Applied sRGB→Linear (gamma 2.2) for physically accurate EV matching.")
+                req_plate_space = (plate_space or "").strip() if plate_space is not None else ""
+                if not req_plate_space or req_plate_space.lower() in ("auto", "auto (by file type)"):
+                    if ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tga', '.tif', '.tiff'):
+                        eff_plate_space = "sRGB"
+                        print(f"[Pipeline] Plate '{os.path.basename(plate_path)}' auto-detected as sRGB ({ext}).")
+                    else:
+                        eff_plate_space = input_space
                 else:
-                    self.state.plate_is_display_referred = False
+                    eff_plate_space = req_plate_space
+
+                self.state.plate_colorspace = eff_plate_space
+                self.state.plate_is_display_referred = self.colorspace_manager.is_display_referred(eff_plate_space)
                 self.state.plate_array = self.colorspace_manager.transform_image(
-                    plate_raw, input_space, working_space)
+                    plate_raw, eff_plate_space, working_space)
                 self.state.plate_proxy = self._create_proxy(self.state.plate_array)
             except Exception as e:
                 errors.append(f"Plate Load Error: {e}")
@@ -1437,6 +1440,9 @@ class CalibrationPipeline:
             "hdri_path": self.state.hdri_path,
             "plate_path": self.state.plate_path,
             "cg_exr_path": self.state.cg_exr_path,
+            "input_colorspace": getattr(self.state, "input_colorspace", "Linear"),
+            "plate_colorspace": getattr(self.state, "plate_colorspace", "Auto"),
+            "working_colorspace": getattr(self.state, "working_colorspace", "Linear"),
             
             "hdri_yaw": self.state.hdri_yaw,
             "ev_offset": self.state.ev_offset,
@@ -1500,6 +1506,9 @@ class CalibrationPipeline:
         # We don't restore paths here automatically because load_inputs does that.
         # But we do want to return them so UI can reload the images.
         
+        self.state.input_colorspace = data.get("input_colorspace", "Linear")
+        self.state.plate_colorspace = data.get("plate_colorspace", "Auto")
+        self.state.working_colorspace = data.get("working_colorspace", "Linear")
         self.state.hdri_yaw = data.get("hdri_yaw", 0.0)
         self.state.ev_offset = data.get("ev_offset", 0.0)
         self.state.black_offset = data.get("black_offset", 0.0)

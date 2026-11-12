@@ -1817,6 +1817,54 @@ def _ensure_dome_light_latlong(dome_node):
                 pass
 
 
+def _downsample_float32(arr, target_w, target_h):
+    """Downsample or resize image array to (target_h, target_w, 3) in full float32 precision."""
+    if arr is None or arr.size == 0:
+        return None
+    img = np.asarray(arr, dtype=np.float32)
+    if img.ndim == 2:
+        img = np.stack([img, img, img], axis=-1)
+    elif img.shape[2] == 1:
+        img = np.repeat(img, 3, axis=-1)
+    elif img.shape[2] > 3:
+        img = img[..., :3]
+
+    h, w = img.shape[:2]
+    target_w = max(1, int(target_w))
+    target_h = max(1, int(target_h))
+    if h == target_h and w == target_w:
+        return np.ascontiguousarray(img, dtype=np.float32)
+
+    kh = max(1, h // target_h)
+    kw = max(1, w // target_w)
+    if kh > 1 or kw > 1:
+        h_crop = (h // kh) * kh
+        w_crop = (w // kw) * kw
+        if h_crop > 0 and w_crop > 0:
+            img = img[:h_crop, :w_crop, :].reshape(
+                h_crop // kh, kh, w_crop // kw, kw, 3
+            ).mean(axis=(1, 3), dtype=np.float32)
+            h, w = img.shape[:2]
+
+    if h == target_h and w == target_w:
+        return np.ascontiguousarray(img, dtype=np.float32)
+
+    y = np.linspace(0.0, max(h - 1, 0), target_h, dtype=np.float32)
+    x = np.linspace(0.0, max(w - 1, 0), target_w, dtype=np.float32)
+    y0 = np.floor(y).astype(np.int64)
+    x0 = np.floor(x).astype(np.int64)
+    y1 = np.clip(y0 + 1, 0, h - 1)
+    x1 = np.clip(x0 + 1, 0, w - 1)
+    wy = (y - y0)[:, None, None]
+    wx = (x - x0)[None, :, None]
+    ia = img[np.ix_(y0, x0)]
+    ib = img[np.ix_(y0, x1)]
+    ic = img[np.ix_(y1, x0)]
+    id_ = img[np.ix_(y1, x1)]
+    out = ia * (1.0 - wx) * (1.0 - wy) + ib * wx * (1.0 - wy) + ic * (1.0 - wx) * wy + id_ * wx * wy
+    return np.ascontiguousarray(out, dtype=np.float32)
+
+
 class HdriMatchSolarisPanel(QtWidgets.QWidget):
     """Main panel widget for HDRI Match Solaris."""
 
@@ -1874,7 +1922,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        print("[DomeBreaker] Loading v2.0.5...")
+        print("[DomeBreaker] Loading v2.0.6...")
         self._initializing = True
         self._restoring_state = False
         if not parent and self.isWindow():
@@ -1895,6 +1943,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         self._plate_orig_full = None
         self._plate_orig_shape = None
         self._hdri_orig_shape = None
+        self._plate_cs_user_selected = False
+        self._input_cs_user_selected = False
         self._hdri_full_array = None
         self._hdri_orig_full = None
         self._current_calibrated_path = None
@@ -1945,7 +1995,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         restored = self._restore_state_from_scene(notify=False, allow_prefs=False)
         self._initializing = False
         self.log("DomeBreaker panel initialized. Ready.", "SUCCESS")
-        print("[DomeBreaker] Ready v2.0.5.")
+        print("[DomeBreaker] Ready v2.0.6.")
 
     def _get_bg_bake_worker(self):
         if self._bg_bake_worker is None:
@@ -2078,7 +2128,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lbl_t.setAlignment(QtCore.Qt.AlignCenter)
         lbl_t.setStyleSheet("font-size: 20px; font-weight: 900; color: #ffae19; letter-spacing: 2px;")
 
-        lbl_v = QtWidgets.QLabel("v2.0.5 - Solaris USD Lighting & Environment Suite")
+        lbl_v = QtWidgets.QLabel("v2.0.6 - Solaris USD Lighting & Environment Suite")
         lbl_v.setAlignment(QtCore.Qt.AlignCenter)
         lbl_v.setStyleSheet("font-size: 11px; font-weight: bold; color: #5dade2; letter-spacing: 0.8px;")
         title_box.addWidget(lbl_t)
@@ -2425,16 +2475,81 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lay.addRow("Plate:", plate_row)
 
         self.combo_input_cs = QtWidgets.QComboBox()
-        self.combo_input_cs.addItems(["Linear", "ACEScg", "ACES2065-1", "sRGB", "Rec.709"])
         self.combo_input_cs.setToolTip("Input color space of the raw HDRI map")
         lay.addRow("HDRI Space:", self.combo_input_cs)
 
         self.combo_plate_cs = QtWidgets.QComboBox()
-        self.combo_plate_cs.addItems(["sRGB", "ACEScg", "Linear", "Rec.709", "ACES2065-1", "ACEScc", "ACEScct"])
-        self.combo_plate_cs.setToolTip("Input color space of the Target Plate image")
+        self.combo_plate_cs.setToolTip("Input color space or OCIO Display (View) of the Target Plate image")
         lay.addRow("Plate Space:", self.combo_plate_cs)
 
+        self._populate_colorspace_combos()
+
         self._scroll_layout.addWidget(sec)
+
+    def _populate_colorspace_combos(self):
+        """Populate HDRI and Plate colorspace dropdowns with presets + active OCIO ColorSpaces & Display/Views."""
+        input_presets = [
+            "Linear",
+            "ACEScg",
+            "Linear Rec.709 (sRGB)",
+            "ACES2065-1",
+            "sRGB",
+            "Rec.709",
+        ]
+        plate_presets = [
+            "sRGB",
+            "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)",
+            "ACEScg",
+            "Linear",
+            "Linear Rec.709 (sRGB)",
+            "Rec.709",
+            "Rec.1886 Rec.709 - Display",
+            "ACES2065-1",
+            "ACEScc",
+            "ACEScct",
+        ]
+
+        ocio_spaces = []
+        ocio_views = []
+        try:
+            from hdri_match.core.colorspace import ColorSpaceManager
+            if not hasattr(self, '_csm') or self._csm is None:
+                self._csm = ColorSpaceManager()
+            ocio_spaces = list(self._csm.get_color_spaces() or [])
+            ocio_views = list(self._csm.get_all_display_views() or [])
+        except Exception:
+            pass
+
+        def _dedupe(items):
+            seen = set()
+            out = []
+            for item in items:
+                s = str(item).strip()
+                if s and s not in seen:
+                    seen.add(s)
+                    out.append(s)
+            return out
+
+        input_items = _dedupe(input_presets + ocio_spaces + ocio_views)
+        plate_items = _dedupe(plate_presets + ocio_views + ocio_spaces)
+
+        for combo, items in ((self.combo_input_cs, input_items), (self.combo_plate_cs, plate_items)):
+            combo.clear()
+            combo.addItems(items)
+            try:
+                policy = getattr(
+                    QtWidgets.QComboBox,
+                    "AdjustToMinimumContentsLengthWithIcon",
+                    None,
+                )
+                if policy is None and hasattr(QtWidgets.QComboBox, "SizeAdjustPolicy"):
+                    policy = QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+                if policy is not None and hasattr(combo, "setSizeAdjustPolicy"):
+                    combo.setSizeAdjustPolicy(policy)
+                if hasattr(combo, "setMinimumContentsLength"):
+                    combo.setMinimumContentsLength(18)
+            except Exception:
+                pass
 
     def _build_gaussian_splat_unified_section(self):
         """Unified SplatForge master section containing shared file input and workflow tabs."""
@@ -8358,12 +8473,18 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         """Handle HDRI Input Space dropdown change."""
         if getattr(self, '_restoring_state', False):
             return
+        self._input_cs_user_selected = True
         self._apply_input_colorspace(notify_ui=True)
 
     def _on_plate_cs_changed(self, idx):
         """Handle Plate Space dropdown change."""
         if getattr(self, '_restoring_state', False):
             return
+        self._plate_cs_user_selected = True
+        if hasattr(self, 'combo_plate_cs'):
+            cur = self.combo_plate_cs.currentText().strip()
+            if cur:
+                self.combo_plate_cs.setToolTip(f"Target Plate Color Space: {cur}")
         self._apply_input_colorspace(notify_ui=True)
 
     def _on_sky_mode_changed(self, idx):
@@ -11675,14 +11796,25 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     self.chk_lookdev_white.setChecked(bool(state["lookdev_white"]))
 
                 # 10. Color Space, Auto Cal, Protect Sun, Sky mode & auto bake
-                if "input_cs" in state and hasattr(self, 'combo_input_cs'):
-                    idx = self.combo_input_cs.findText(state["input_cs"])
+                if "input_cs" in state and state["input_cs"] and hasattr(self, 'combo_input_cs'):
+                    val_in = str(state["input_cs"]).strip()
+                    idx = self.combo_input_cs.findText(val_in)
+                    if idx < 0 and val_in:
+                        self.combo_input_cs.addItem(val_in)
+                        idx = self.combo_input_cs.findText(val_in)
                     if idx >= 0:
                         self.combo_input_cs.setCurrentIndex(idx)
-                if "plate_cs" in state and hasattr(self, 'combo_plate_cs'):
-                    idx = self.combo_plate_cs.findText(state["plate_cs"])
+                        self._input_cs_user_selected = True
+                if "plate_cs" in state and state["plate_cs"] and hasattr(self, 'combo_plate_cs'):
+                    val_pl = str(state["plate_cs"]).strip()
+                    idx = self.combo_plate_cs.findText(val_pl)
+                    if idx < 0 and val_pl:
+                        self.combo_plate_cs.addItem(val_pl)
+                        idx = self.combo_plate_cs.findText(val_pl)
                     if idx >= 0:
                         self.combo_plate_cs.setCurrentIndex(idx)
+                        self._plate_cs_user_selected = True
+                        self.combo_plate_cs.setToolTip(f"Target Plate Color Space: {val_pl}")
                 if "auto_cal" in state and hasattr(self, 'chk_auto_cal'):
                     self.chk_auto_cal.setChecked(bool(state["auto_cal"]))
                 if "protect_sun" in state and hasattr(self, 'chk_protect_sun'):
@@ -11839,10 +11971,13 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 self.sld_contrast.setRange(0.2, 2.5)
                 self.sld_contrast.setValue(1.0)
             self.sld_yaw.setValue(0.0)
+            self._input_cs_user_selected = False
+            self._plate_cs_user_selected = False
             if hasattr(self, 'combo_input_cs'):
                 self.combo_input_cs.setCurrentIndex(0)
             if hasattr(self, 'combo_plate_cs'):
                 self.combo_plate_cs.setCurrentIndex(0)
+                self.combo_plate_cs.setToolTip("Input color space or OCIO Display (View) of the Target Plate image")
             if hasattr(self, 'chk_auto_cal'):
                 self.chk_auto_cal.setChecked(False)
             if hasattr(self, 'chk_protect_sun'):
@@ -12184,13 +12319,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
             h, w = arr.shape[:2]
             target_h, target_w = 240, 480
-            try:
-                from PIL import Image
-                p_img = Image.fromarray(np.clip(arr[..., :3] * 255.0, 0, 255).astype(np.uint8))
-                resample_filter = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
-                p_img = p_img.resize((target_w, target_h), resample_filter)
-                self._hdri_orig_thumb = (np.array(p_img, dtype=np.float32) / 255.0)
-            except Exception:
+            thumb = _downsample_float32(arr, target_w, target_h)
+            if thumb is not None:
+                self._hdri_orig_thumb = thumb
+            else:
                 y_idx = np.linspace(0, h - 1, target_h).astype(int)
                 x_idx = np.linspace(0, w - 1, target_w).astype(int)
                 self._hdri_orig_thumb = arr[y_idx][:, x_idx, :3].astype(np.float32)
@@ -12392,22 +12524,23 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             self._plate_orig_shape = (w, h)
             self._plate_orig_full = arr[..., :3].astype(np.float32)
 
-            # Generate high-quality anti-aliased thumbnail for dock widgets (480x270 or aspect-correct)
+            # Generate anti-aliased full-float32 thumbnail for dock widgets (480x270 or aspect-correct)
             target_w = 480
             target_h = max(1, int(round(target_w * (h / float(w)))))
-            try:
-                from PIL import Image
-                p_img = Image.fromarray(np.clip(arr[..., :3] * 255.0, 0, 255).astype(np.uint8))
-                resample_filter = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
-                p_img = p_img.resize((target_w, target_h), resample_filter)
-                self._plate_orig_thumb = (np.array(p_img, dtype=np.float32) / 255.0)
-            except Exception:
+            thumb = _downsample_float32(arr, target_w, target_h)
+            if thumb is not None:
+                self._plate_orig_thumb = thumb
+            else:
                 y_idx = np.linspace(0, h - 1, target_h).astype(int)
                 x_idx = np.linspace(0, w - 1, target_w).astype(int)
                 self._plate_orig_thumb = arr[y_idx][:, x_idx, :3].astype(np.float32)
 
-            # Auto-suggest plate color space based on file format if not restoring existing state
-            if hasattr(self, 'combo_plate_cs') and not getattr(self, '_restoring_state', False):
+            # Auto-suggest plate color space by file format ONLY when neither restoring nor user-selected
+            if (
+                hasattr(self, 'combo_plate_cs')
+                and not getattr(self, '_restoring_state', False)
+                and not getattr(self, '_plate_cs_user_selected', False)
+            ):
                 ext = os.path.splitext(path)[1].lower()
                 target_cs = "sRGB" if ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff') else "ACEScg"
                 idx = self.combo_plate_cs.findText(target_cs)
@@ -12756,7 +12889,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def sample_average_plate_sky(self):
         """Sample top 40% average linear color from plate and apply to Sky Color."""
-        plate_arr = getattr(self, '_plate_full_array', None) or getattr(self, '_plate_thumb_raw', None)
+        plate_arr = getattr(self, '_plate_full_array', None)
+        if plate_arr is None:
+            plate_arr = getattr(self, '_plate_thumb_raw', None)
         if plate_arr is None:
             self.log("No Target Plate loaded to sample average sky.", "WARNING")
             return
@@ -12773,7 +12908,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def sample_average_plate_ground(self):
         """Sample bottom 40% average linear color from plate and apply to Ground Color."""
-        plate_arr = getattr(self, '_plate_full_array', None) or getattr(self, '_plate_thumb_raw', None)
+        plate_arr = getattr(self, '_plate_full_array', None)
+        if plate_arr is None:
+            plate_arr = getattr(self, '_plate_thumb_raw', None)
         if plate_arr is None:
             self.log("No Target Plate loaded to sample average ground.", "WARNING")
             return
@@ -13348,7 +13485,6 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
             # If auto-calibrate is checked and plate is provided, compute exposure/color match from plate
             if p.get("auto_cal", False) and plate_path and os.path.isfile(plate_path):
-                self.log("Computing chromaticity and exposure calibration from plate...", "INFO")
                 import numpy as np
                 from hdri_match.core.pipeline import CalibrationPipeline
                 pipeline = CalibrationPipeline()
@@ -13356,24 +13492,17 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                 pipeline.state.sky_mode = p.get("sky_mode", "top_40")
                 hdri_cs = p.get("input_cs", "Linear")
                 plate_cs = p.get("plate_cs", "sRGB")
-                pipeline.load_inputs(hdri_path, plate_path,
-                                    input_space=hdri_cs, working_space="Linear")
-
-                # If plate color space differs from HDRI input_cs, transform plate_array with plate_cs
-                if plate_cs != hdri_cs:
-                    try:
-                        from hdri_match.io.loader import load_exr_to_numpy
-                        raw_p = load_exr_to_numpy(plate_path)
-                        if raw_p is not None:
-                            ext = os.path.splitext(plate_path)[1].lower()
-                            if ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tga', '.tif', '.tiff'):
-                                raw_p = np.power(np.clip(raw_p, 0.0, 1.0), 2.2)
-                            pipeline.state.plate_array = pipeline.colorspace_manager.transform_image(
-                                raw_p, plate_cs, "Linear"
-                            )
-                            pipeline.state.plate_proxy = pipeline._create_proxy(pipeline.state.plate_array)
-                    except Exception as e:
-                        self.log(f"Plate colorspace transform note: {e}", "DETAIL")
+                self.log(
+                    f"Computing chromaticity and exposure calibration from plate (HDRI: {hdri_cs}, Plate: {plate_cs})...",
+                    "INFO",
+                )
+                pipeline.load_inputs(
+                    hdri_path,
+                    plate_path,
+                    input_space=hdri_cs,
+                    working_space="Linear",
+                    plate_space=plate_cs,
+                )
 
                 pipeline.compute_calibration(protect_sun=p.get("protect_sun", True))
 
@@ -14751,7 +14880,8 @@ def _gen_calibrate_code(p):
         '',
         'pipeline = CalibrationPipeline()',
         'pipeline.load_inputs(hdri_path, plate_path,',
-        '    input_space="{0}", working_space="Linear")'.format(p["input_cs"]),
+        '    input_space={0!r}, working_space="Linear", plate_space={1!r})'.format(
+            p.get("input_cs", "Linear"), p.get("plate_cs", "Auto")),
         '',
         'pipeline.state.apply_exposure_match = {0}'.format(p["auto_cal"]),
         'pipeline.state.sky_mode = "{0}"'.format(p["sky_mode"]),

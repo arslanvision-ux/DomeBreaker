@@ -39,6 +39,7 @@ def read_calibration_parms(node):
 
         # Color space
         "input_colorspace": _parm_val(node, "input_colorspace", "Linear"),
+        "plate_colorspace": _parm_val(node, "plate_colorspace", "Auto"),
         "working_colorspace": _parm_val(node, "working_colorspace", "Linear"),
 
         # Calibration toggles

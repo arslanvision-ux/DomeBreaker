@@ -139,6 +139,9 @@ class ImageState:
     
     plate_mask_rect: Optional[Tuple[int, int, int, int]] = None  # (x1, y1, x2, y2) drawn on plate
     plate_is_display_referred: bool = False  # True for JPG/PNG (sRGB gamma), False for EXR/HDR (linear)
+    input_colorspace: str = "Linear"
+    plate_colorspace: str = "Auto"
+    working_colorspace: str = "Linear"
     
     # Plate Adjustments (independent of HDRI calibration)
     plate_adjustments_enabled: bool = False

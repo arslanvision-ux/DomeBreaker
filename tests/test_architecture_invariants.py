@@ -155,21 +155,21 @@ def _ensure_fake_qt_if_absent(monkeypatch):
 
 def test_version_consistency():
     with open(os.path.join(REPO_ROOT, "VERSION"), "r", encoding="utf-8") as f:
-        assert f.read().strip() == "v2.0.5"
+        assert f.read().strip() == "v2.0.6"
 
     with open(os.path.join(PYTHON_ROOT, "hdri_match_solaris", "__init__.py"), "r", encoding="utf-8") as f:
         sol_init = f.read()
-    assert '__version__ = "2.0.5"' in sol_init
+    assert '__version__ = "2.0.6"' in sol_init
     assert '__houdini_min__ = "20.0"' in sol_init
 
     with open(os.path.join(PYTHON_ROOT, "domebreaker", "__init__.py"), "r", encoding="utf-8") as f:
         db_init = f.read()
-    assert '__version__ = "2.0.5"' in db_init
+    assert '__version__ = "2.0.6"' in db_init
 
     with open(os.path.join(PYTHON_ROOT, "hdri_match_solaris", "panel_ui.py"), "r", encoding="utf-8") as f:
         panel_src = f.read()
-    assert "Loading v2.0.5..." in panel_src
-    assert "v2.0.5 - Solaris USD Lighting & Environment Suite" in panel_src
+    assert "Loading v2.0.6..." in panel_src
+    assert "v2.0.6 - Solaris USD Lighting & Environment Suite" in panel_src
 
 
 def test_no_c1_mojibake_orphan_fe0f_or_4byte_emojis():
@@ -921,6 +921,447 @@ def test_updater_zip_slip_blocked_and_safe_extract_works(monkeypatch, tmp_path):
     good_zip = tmp_path / "good.zip"
     safe_dir = tmp_path / "safe_out"
     with zipfile.ZipFile(good_zip, "w") as zf:
-        zf.writestr("DomeBreaker-main/VERSION", "v2.0.5\n")
+        zf.writestr("DomeBreaker-main/VERSION", "v2.0.6\n")
     upd._safe_extract_zip(str(good_zip), str(safe_dir))
-    assert (safe_dir / "DomeBreaker-main" / "VERSION").read_text(encoding="utf-8").strip() == "v2.0.5"
+    assert (safe_dir / "DomeBreaker-main" / "VERSION").read_text(encoding="utf-8").strip() == "v2.0.6"
+
+
+# ---------------------------------------------------------------------------
+# 9. ColorSpaceManager OCIOv2 Display/View & Plate Color Space Support
+# ---------------------------------------------------------------------------
+
+
+def test_colorspace_manager_ociov2_display_view_and_aliases(monkeypatch):
+    from hdri_match.core import colorspace
+
+    calls = []
+
+    class _FakeCS:
+        def __init__(self, name):
+            self._name = name
+
+        def getName(self):
+            return self._name
+
+    class _FakeDisplayViewTransform:
+        def __init__(self):
+            self.src = None
+            self.display = None
+            self.view = None
+            self.direction = None
+
+        def setSrc(self, val):
+            self.src = val
+
+        def setDisplay(self, val):
+            self.display = val
+
+        def setView(self, val):
+            self.view = val
+
+        def setDirection(self, val):
+            self.direction = val
+
+    class _FakeCPU:
+        def __init__(self, transform_desc, rgba_only=False):
+            self.transform_desc = transform_desc
+            self.rgba_only = rgba_only
+
+        def applyRGB(self, buf):
+            if self.rgba_only:
+                raise AttributeError("applyRGB unavailable")
+            buf[:] = buf * 0.25 + 0.05
+            buf[0] = np.nan
+
+        def applyRGBA(self, buf):
+            buf[0::4] = buf[0::4] * 0.5 + 0.02
+            buf[1::4] = buf[1::4] * 0.5 + 0.02
+            buf[2::4] = buf[2::4] * 0.5 + 0.02
+
+    class _FakeConfig:
+        def __init__(self):
+            self._spaces = [
+                "ACEScg",
+                "ACES2065-1",
+                "Linear Rec.709 (sRGB)",
+                "sRGB - Texture",
+                "Rec.1886 Rec.709 - Display",
+                "Raw",
+            ]
+            self._roles = {
+                "scene_linear": "ACEScg",
+            }
+            self._displays = ["sRGB - Display", "Rec.1886 Rec.709 - Display"]
+            self._views = {
+                "sRGB - Display": ["ACES 1.0 - SDR Video", "Un-tone-mapped", "Raw"],
+                "Rec.1886 Rec.709 - Display": ["ACES 1.0 - SDR Video", "Un-tone-mapped", "Raw"],
+            }
+
+        def getColorSpaces(self):
+            return [_FakeCS(n) for n in self._spaces]
+
+        def getColorSpace(self, name):
+            if name in self._roles:
+                return _FakeCS(self._roles[name])
+            if name in self._spaces:
+                return _FakeCS(name)
+            return None
+
+        def getDisplays(self):
+            return iter(self._displays)
+
+        def getDefaultDisplay(self):
+            return "Rec.1886 Rec.709 - Display"
+
+        def getViews(self, display):
+            return iter(self._views.get(display, []))
+
+        def getProcessor(self, *args):
+            if len(args) == 1 and isinstance(args[0], _FakeDisplayViewTransform):
+                dt = args[0]
+                calls.append(("dv", dt.src, dt.display, dt.view, dt.direction))
+                rgba_only = (dt.display == "sRGB - Display")
+                return types.SimpleNamespace(getDefaultCPUProcessor=lambda: _FakeCPU("dv", rgba_only=rgba_only))
+            elif len(args) == 2:
+                calls.append(("cs", args[0], args[1]))
+                return types.SimpleNamespace(getDefaultCPUProcessor=lambda: _FakeCPU("cs"))
+            raise AssertionError(f"Unexpected getProcessor args: {args}")
+
+    fake_ocio = types.SimpleNamespace(
+        TRANSFORM_DIR_FORWARD=0,
+        TRANSFORM_DIR_INVERSE=1,
+        DisplayViewTransform=_FakeDisplayViewTransform,
+        GetCurrentConfig=lambda: _FakeConfig(),
+        Config=types.SimpleNamespace(CreateFromFile=lambda p: _FakeConfig()),
+    )
+
+    monkeypatch.setattr(colorspace, "OCIO", fake_ocio)
+    csm = colorspace.ColorSpaceManager()
+
+    display_views = csm.get_all_display_views()
+    assert "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)" in display_views
+    assert "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)" in csm.get_available_input_spaces()
+
+    # Valid OCIO ColorSpace containing parentheses must NOT be parsed as Display/View
+    assert csm.parse_display_view("Linear Rec.709 (sRGB)") is None
+    assert csm.parse_display_view("ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)") == (
+        "Rec.1886 Rec.709 - Display",
+        "ACES 1.0 - SDR Video",
+    )
+    assert csm.is_display_referred("ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)") is True
+    assert csm.is_display_referred("Raw (Rec.1886 Rec.709 - Display)") is False
+    assert csm.is_display_referred("Linear Rec.709 (sRGB)") is False
+
+    plate = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    out = csm.transform_image(plate, "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)", "Linear")
+    assert calls[-1] == ("dv", "ACEScg", "Rec.1886 Rec.709 - Display", "ACES 1.0 - SDR Video", 1)
+    assert out.dtype == np.float32 and np.all(np.isfinite(out))
+    assert np.isclose(out[0, 0, 0], 0.0)  # NaN sanitized
+    assert np.isclose(out[0, 1, 0], 0.175, atol=1e-5)
+
+    # Verify applyRGBA fallback path mutates a persistent buffer (no .flatten() copy discard bug)
+    out_srgb_dv = csm.transform_image(plate, "ACES 1.0 - SDR Video (sRGB - Display)", "Linear")
+    assert calls[-1] == ("dv", "ACEScg", "sRGB - Display", "ACES 1.0 - SDR Video", 1)
+    assert np.isclose(out_srgb_dv[0, 0, 0], 0.27, atol=1e-5)
+
+    # Verify forward display transform
+    _ = csm.apply_display_transform(out_srgb_dv, "ACEScg", view="ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)")
+    assert calls[-1] == ("dv", "ACEScg", "Rec.1886 Rec.709 - Display", "ACES 1.0 - SDR Video", 0)
+
+
+def test_colorspace_manager_fallback_aces_sdr_rec1886(monkeypatch):
+    from hdri_match.core import colorspace
+
+    monkeypatch.setattr(colorspace, "OCIO", None)
+    csm = colorspace.ColorSpaceManager()
+
+    assert "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)" in csm.get_all_display_views()
+    assert "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)" in csm.get_available_input_spaces()
+    assert csm.is_display_referred("ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)") is True
+
+    ramp = np.array([[[0.0, 0.0, 0.0], [0.25, 0.25, 0.25], [0.58, 0.58, 0.58], [1.0, 1.0, 1.0]]], dtype=np.float32)
+    lin = csm.transform_image(ramp, "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)", "Linear")
+    acescg = csm.transform_image(ramp, "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)", "ACEScg")
+    ap0 = csm.transform_image(ramp, "ACES2065-1", "Linear")
+
+    assert lin.dtype == np.float32 and np.all(np.isfinite(lin))
+    assert acescg.dtype == np.float32 and np.all(np.isfinite(acescg))
+    assert np.all(np.diff(lin[0, :, 0]) > 0.0)
+    assert np.isclose(lin[0, 0, 0], 0.0, atol=1e-6)
+    # Peak display white inverse maps above 1.0 in scene-linear HDR and stays finite
+    assert 2.0 < lin[0, 3, 0] < 20.0
+    # Ensure ACES 1.0 SDR Video is NOT misclassified as ACES2065-1 linear AP0
+    assert not np.allclose(lin, ap0, atol=1e-2)
+
+    # Round-trip 0.18 mid-grey through Linear -> ACES 1.0 SDR Video -> Linear
+    mid_grey = np.full((2, 2, 3), 0.18, dtype=np.float32)
+    encoded = csm.transform_image(mid_grey, "Linear", "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)")
+    decoded = csm.transform_image(encoded, "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)", "Linear")
+    assert np.allclose(decoded, mid_grey, atol=1e-4)
+
+
+def test_pipeline_plate_colorspace_no_double_gamma_and_persistence(monkeypatch, tmp_path):
+    from hdri_match.core import colorspace, pipeline as pipe_mod
+
+    monkeypatch.setattr(colorspace, "OCIO", None)
+    raw_plate = np.full((8, 12, 3), 0.5, dtype=np.float32)
+    raw_hdri = np.full((8, 16, 3), 1.0, dtype=np.float32)
+
+    def _fake_loader(path):
+        if "plate" in os.path.basename(path).lower():
+            return raw_plate.copy()
+        return raw_hdri.copy()
+
+    monkeypatch.setattr(pipe_mod, "load_exr_to_numpy", _fake_loader)
+
+    p = pipe_mod.CalibrationPipeline()
+    recorded_transforms = []
+    orig_transform = p.colorspace_manager.transform_image
+
+    def _spy_transform(img, src, dst):
+        recorded_transforms.append((src, dst, float(img[0, 0, 0])))
+        return orig_transform(img, src, dst)
+
+    monkeypatch.setattr(p.colorspace_manager, "transform_image", _spy_transform)
+
+    # 1. Explicit OCIOv2 Display/View plate space on PNG must receive exact 0.5 (no ** 2.2 double-gamma)
+    p.load_inputs(
+        str(tmp_path / "env.exr"),
+        str(tmp_path / "plate.png"),
+        input_space="Linear",
+        working_space="Linear",
+        plate_space="ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)",
+    )
+    assert ("ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)", "Linear", 0.5) in recorded_transforms
+    assert p.state.plate_colorspace == "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)"
+    assert p.state.plate_is_display_referred is True
+
+    # 2. Auto on .png resolves to sRGB with raw 0.5 (single EOTF decode via ColorSpaceManager)
+    recorded_transforms.clear()
+    p.load_inputs(
+        str(tmp_path / "env.exr"),
+        str(tmp_path / "plate.png"),
+        input_space="Linear",
+        working_space="Linear",
+        plate_space="Auto",
+    )
+    assert ("sRGB", "Linear", 0.5) in recorded_transforms
+    assert p.state.plate_colorspace == "sRGB"
+    assert p.state.plate_is_display_referred is True
+    assert np.allclose(p.state.plate_array[0, 0], ((0.5 + 0.055) / 1.055) ** 2.4, atol=1e-4)
+
+    # 3. Project save/load preserves plate_colorspace
+    proj_file = str(tmp_path / "project.json")
+    p.state.plate_colorspace = "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)"
+    p.save_project(proj_file)
+
+    p2 = pipe_mod.CalibrationPipeline()
+    p2.load_project(proj_file)
+    assert p2.state.plate_colorspace == "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)"
+    assert p2.state.input_colorspace == "Linear"
+    assert p2.state.working_colorspace == "Linear"
+
+
+def test_hda_lop_and_panel_plate_colorspace_integration(monkeypatch, tmp_path):
+    from hdri_match_solaris import hda_utils, lop_calibrate, usd_helpers
+
+    # 1. hda_utils.read_calibration_parms reads plate_colorspace with "Auto" default
+    parm_map = {
+        "hdri_path": "env.exr",
+        "plate_path": "plate.png",
+        "input_colorspace": "Linear",
+        "plate_colorspace": "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)",
+        "working_colorspace": "Linear",
+    }
+    fake_hda = types.SimpleNamespace(
+        parm=lambda n: types.SimpleNamespace(eval=lambda k=n: parm_map[k]) if n in parm_map else None,
+        parmTuple=lambda n: None,
+    )
+    read_p = hda_utils.read_calibration_parms(fake_hda)
+    assert read_p["plate_colorspace"] == "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)"
+
+    parm_map.pop("plate_colorspace")
+    assert hda_utils.read_calibration_parms(fake_hda)["plate_colorspace"] == "Auto"
+
+    # 2. lop_calibrate.cook passes plate_space to pipeline.load_inputs
+    hdri_file = str(tmp_path / "env.exr")
+    plate_file = str(tmp_path / "plate.png")
+    open(hdri_file, "wb").write(b"exr")
+    open(plate_file, "wb").write(b"png")
+
+    monkeypatch.setitem(sys.modules, "hou", _ensure_fake_hou_module())
+    load_calls = []
+
+    class _FakePipe:
+        def __init__(self):
+            self.state = types.SimpleNamespace(
+                ev_offset=0.0, black_offset=0.0, temperature=0.0, tint=0.0, hdri_yaw=0.0
+            )
+
+        def load_inputs(self, *a, **kw):
+            load_calls.append((a, kw))
+
+        def compute_calibration(self, **kw):
+            pass
+
+        def process_hdri(self, use_proxy=False):
+            return np.ones((4, 8, 3), dtype=np.float32)
+
+    monkeypatch.setitem(sys.modules, "hdri_match.core.pipeline", types.SimpleNamespace(CalibrationPipeline=_FakePipe))
+    monkeypatch.setitem(sys.modules, "hdri_match.io.loader", types.SimpleNamespace(load_exr_to_numpy=lambda p: None))
+    monkeypatch.setitem(sys.modules, "hdri_match.io.exporter", types.SimpleNamespace(save_numpy_to_image=lambda a, p: None))
+    monkeypatch.setattr(
+        hda_utils,
+        "read_calibration_parms",
+        lambda n: {
+            "hdri_path": hdri_file,
+            "plate_path": plate_file,
+            "input_colorspace": "ACEScg",
+            "plate_colorspace": "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)",
+            "working_colorspace": "Linear",
+            "auto_calibrate": True,
+            "protect_sun": True,
+        },
+    )
+    monkeypatch.setattr(hda_utils, "build_output_path", lambda n, p: str(tmp_path / "out.exr"))
+    monkeypatch.setattr(hda_utils, "sync_parms_to_pipeline", lambda n, p: None)
+    monkeypatch.setattr(usd_helpers, "ensure_scope", lambda s, p: None)
+    monkeypatch.setattr(usd_helpers, "set_dome_light", lambda *a, **k: types.SimpleNamespace(GetPrim=lambda: "PRIM"))
+    monkeypatch.setattr(usd_helpers, "write_calibration_metadata", lambda p, d: None)
+
+    lop_calibrate.cook(types.SimpleNamespace(editableStage=lambda: object()))
+    assert len(load_calls) == 1
+    assert load_calls[0][1]["plate_space"] == "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)"
+
+    # 3. panel_ui float32 downsample, combo population, user-selection preservation & codegen
+    _ensure_fake_qt_if_absent(monkeypatch)
+    monkeypatch.delitem(sys.modules, "hdri_match_solaris.panel_ui", raising=False)
+    from hdri_match_solaris import panel_ui
+
+    hdr_arr = np.full((16, 32, 3), 4.5, dtype=np.float32)
+    thumb = panel_ui._downsample_float32(hdr_arr, 16, 8)
+    assert thumb.shape == (8, 16, 3) and thumb.dtype == np.float32
+    assert np.isclose(float(thumb.max()), 4.5, atol=1e-4)  # No uint8 255 clip
+
+    gen_code = panel_ui._gen_calibrate_code({
+        "hdri_path": "env.exr", "plate_path": "plate.png",
+        "input_cs": "ACEScg", "plate_cs": "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)",
+        "sky_mode": "top_40", "ev": 0.0, "black": 0.0, "temp": 0.0, "tint": 0.0, "yaw": 0.0,
+        "horizon_en": False, "horizon_h": 0.5, "horizon_f": 0.1, "sky_ev": 0.0,
+        "ground_ev": 0.0, "softclip_en": False, "softclip_t": 5.0, "softclip_r": 2.0,
+        "auto_cal": True, "protect_sun": True,
+    })
+    assert "plate_space='ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)'" in gen_code
+
+    class _FakeCombo:
+        def __init__(self):
+            self.items = []
+            self.idx = -1
+            self.tooltip = ""
+
+        def clear(self):
+            self.items.clear()
+            self.idx = -1
+
+        def addItem(self, text):
+            self.items.append(text)
+            if self.idx < 0:
+                self.idx = 0
+
+        def addItems(self, texts):
+            for t in texts:
+                self.addItem(t)
+
+        def findText(self, text):
+            return self.items.index(text) if text in self.items else -1
+
+        def setCurrentIndex(self, idx):
+            self.idx = idx
+
+        def currentIndex(self):
+            return self.idx
+
+        def currentText(self):
+            return self.items[self.idx] if 0 <= self.idx < len(self.items) else ""
+
+        def blockSignals(self, flag):
+            pass
+
+        def setToolTip(self, tip):
+            self.tooltip = tip
+
+    def _fail_on_log_error(msg, err=None):
+        raise AssertionError(f"Unexpected panel log_error: {msg} ({err})")
+
+    sampled_colors = {}
+
+    class _FakePicker:
+        def __init__(self, key):
+            self.key = key
+
+        def setColor(self, r, g, b):
+            sampled_colors[self.key] = (r, g, b)
+
+    fake_panel = types.SimpleNamespace(
+        combo_input_cs=_FakeCombo(),
+        combo_plate_cs=_FakeCombo(),
+        txt_hdri=types.SimpleNamespace(text=lambda: ""),
+        txt_plate=types.SimpleNamespace(text=lambda: plate_file),
+        lbl_plate_preview=types.SimpleNamespace(setText=lambda *a: None),
+        lbl_single_plate=types.SimpleNamespace(setText=lambda *a: None),
+        lbl_plate_info=types.SimpleNamespace(setText=lambda *a: None),
+        col_sky=_FakePicker("sky"),
+        col_ground=_FakePicker("ground"),
+        _restoring_state=False,
+        _plate_cs_user_selected=False,
+        _input_cs_user_selected=False,
+        log=lambda *a, **k: None,
+        log_error=_fail_on_log_error,
+        _update_all_previews=lambda: None,
+        _sync_node=lambda: None,
+    )
+    from hdri_match.core import colorspace
+    monkeypatch.setattr(colorspace, "OCIO", None)
+    fake_panel._apply_input_colorspace = (
+        lambda notify_ui=False: panel_ui.HdriMatchSolarisPanel._apply_input_colorspace(fake_panel, notify_ui=notify_ui)
+    )
+    panel_ui.HdriMatchSolarisPanel._populate_colorspace_combos(fake_panel)
+    assert "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)" in fake_panel.combo_plate_cs.items
+
+    # Default (not user-selected): loading .exr auto-suggests ACEScg without uint8 clipping
+    exr_plate = str(tmp_path / "shot_plate.exr")
+    open(exr_plate, "wb").write(b"exr")
+    monkeypatch.setitem(
+        sys.modules,
+        "hdri_match.io.loader",
+        types.SimpleNamespace(load_exr_to_numpy=lambda p: np.full((8, 8, 3), 3.5, dtype=np.float32)),
+    )
+    panel_ui.HdriMatchSolarisPanel._load_plate_preview(fake_panel, exr_plate)
+    assert fake_panel._plate_orig_full is not None and np.isclose(float(fake_panel._plate_orig_full.max()), 3.5)
+    assert fake_panel._plate_orig_thumb is not None and np.isclose(float(fake_panel._plate_orig_thumb.max()), 3.5)
+    assert fake_panel.combo_plate_cs.currentText() == "ACEScg"
+
+    # Explicit user selection must NOT be clobbered by loading a .png or .exr plate
+    aces_dv = "ACES 1.0 - SDR Video (Rec.1886 Rec.709 - Display)"
+    fake_panel.combo_plate_cs.setCurrentIndex(fake_panel.combo_plate_cs.findText(aces_dv))
+    panel_ui.HdriMatchSolarisPanel._on_plate_cs_changed(fake_panel, fake_panel.combo_plate_cs.currentIndex())
+    assert fake_panel._plate_cs_user_selected is True
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hdri_match.io.loader",
+        types.SimpleNamespace(load_exr_to_numpy=lambda p: np.full((8, 8, 3), 0.5, dtype=np.float32)),
+    )
+    panel_ui.HdriMatchSolarisPanel._load_plate_preview(fake_panel, plate_file)
+    assert fake_panel.combo_plate_cs.currentText() == aces_dv
+    # Verify real _apply_input_colorspace decoded the 0.5 ACES SDR plate into scene-linear != 0.5
+    assert fake_panel._plate_full_array is not None
+    assert np.all(np.isfinite(fake_panel._plate_full_array))
+    assert 0.05 < float(fake_panel._plate_full_array[0, 0, 0]) < 0.25
+
+    # Verify plate average sky/ground samplers work with real ndarray without ValueError
+    panel_ui.HdriMatchSolarisPanel.sample_average_plate_sky(fake_panel)
+    panel_ui.HdriMatchSolarisPanel.sample_average_plate_ground(fake_panel)
+    assert "sky" in sampled_colors and "ground" in sampled_colors
+    assert np.allclose(sampled_colors["sky"], (1.0, 1.0, 1.0), atol=1e-4)
+    assert np.allclose(sampled_colors["ground"], (1.0, 1.0, 1.0), atol=1e-4)
