@@ -47,6 +47,7 @@ import os
 import sys
 import re
 import math
+import json
 import traceback
 
 import hou
@@ -1922,7 +1923,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        print("[DomeBreaker] Loading v2.0.7...")
+        print("[DomeBreaker] Loading v2.0.8...")
         self._initializing = True
         self._restoring_state = False
         if not parent and self.isWindow():
@@ -1995,7 +1996,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         restored = self._restore_state_from_scene(notify=False, allow_prefs=False)
         self._initializing = False
         self.log("DomeBreaker panel initialized. Ready.", "SUCCESS")
-        print("[DomeBreaker] Ready v2.0.7.")
+        print("[DomeBreaker] Ready v2.0.8.")
 
     def _get_bg_bake_worker(self):
         if self._bg_bake_worker is None:
@@ -2128,7 +2129,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lbl_t.setAlignment(QtCore.Qt.AlignCenter)
         lbl_t.setStyleSheet("font-size: 20px; font-weight: 900; color: #ffae19; letter-spacing: 2px;")
 
-        lbl_v = QtWidgets.QLabel("v2.0.7 - Solaris USD Lighting & Environment Suite")
+        lbl_v = QtWidgets.QLabel("v2.0.8 - Solaris USD Lighting & Environment Suite")
         lbl_v.setAlignment(QtCore.Qt.AlignCenter)
         lbl_v.setStyleSheet("font-size: 11px; font-weight: bold; color: #5dade2; letter-spacing: 0.8px;")
         title_box.addWidget(lbl_t)
@@ -10983,6 +10984,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
     def _bake_calibrated_hdri(self, notify_ui=False, force_bake=False):
         """Process Exposure, White Balance, Black Offset, Horizon Split, and Soft-Clip on HDRI,
         write calibrated EXR to $HIP, and update Dome Light."""
+        import os
+        import numpy as np
+
         hdri_path = self.txt_hdri.text().strip()
         if not hdri_path:
             return None
@@ -11019,8 +11023,6 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             return None
 
         try:
-            import os
-            import numpy as np
             img = arr.copy()
             h, w = img.shape[:2]
 

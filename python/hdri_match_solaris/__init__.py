@@ -11,7 +11,7 @@ rather than duplicating them.  The original package must be on PYTHONPATH,
 which the Houdini package descriptor handles automatically.
 """
 
-__version__ = "2.0.7"
+__version__ = "2.0.8"
 __author__ = "HDRI Match Plate"
 __houdini_min__ = "20.0"
 

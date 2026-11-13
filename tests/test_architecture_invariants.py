@@ -155,21 +155,21 @@ def _ensure_fake_qt_if_absent(monkeypatch):
 
 def test_version_consistency():
     with open(os.path.join(REPO_ROOT, "VERSION"), "r", encoding="utf-8") as f:
-        assert f.read().strip() == "v2.0.7"
+        assert f.read().strip() == "v2.0.8"
 
     with open(os.path.join(PYTHON_ROOT, "hdri_match_solaris", "__init__.py"), "r", encoding="utf-8") as f:
         sol_init = f.read()
-    assert '__version__ = "2.0.7"' in sol_init
+    assert '__version__ = "2.0.8"' in sol_init
     assert '__houdini_min__ = "20.0"' in sol_init
 
     with open(os.path.join(PYTHON_ROOT, "domebreaker", "__init__.py"), "r", encoding="utf-8") as f:
         db_init = f.read()
-    assert '__version__ = "2.0.7"' in db_init
+    assert '__version__ = "2.0.8"' in db_init
 
     with open(os.path.join(PYTHON_ROOT, "hdri_match_solaris", "panel_ui.py"), "r", encoding="utf-8") as f:
         panel_src = f.read()
-    assert "Loading v2.0.7..." in panel_src
-    assert "v2.0.7 - Solaris USD Lighting & Environment Suite" in panel_src
+    assert "Loading v2.0.8..." in panel_src
+    assert "v2.0.8 - Solaris USD Lighting & Environment Suite" in panel_src
 
 
 def test_no_c1_mojibake_orphan_fe0f_or_4byte_emojis():
@@ -921,9 +921,9 @@ def test_updater_zip_slip_blocked_and_safe_extract_works(monkeypatch, tmp_path):
     good_zip = tmp_path / "good.zip"
     safe_dir = tmp_path / "safe_out"
     with zipfile.ZipFile(good_zip, "w") as zf:
-        zf.writestr("DomeBreaker-main/VERSION", "v2.0.7\n")
+        zf.writestr("DomeBreaker-main/VERSION", "v2.0.8\n")
     upd._safe_extract_zip(str(good_zip), str(safe_dir))
-    assert (safe_dir / "DomeBreaker-main" / "VERSION").read_text(encoding="utf-8").strip() == "v2.0.7"
+    assert (safe_dir / "DomeBreaker-main" / "VERSION").read_text(encoding="utf-8").strip() == "v2.0.8"
 
 
 # ---------------------------------------------------------------------------
@@ -1496,3 +1496,61 @@ def test_dark_night_plate_preview_0ev_raw_and_aces_no_overbrightening(monkeypatc
     fake_panel.chk_preview_auto_expose.checked = True
     u8_auto_exp = panel_ui.HdriMatchSolarisPanel._tonemap_array(fake_panel, fake_panel._plate_thumb_raw, apply_calib=False)
     assert int(u8_auto_exp[10, 10, 0]) > 50
+
+
+def test_bake_calibrated_hdri_with_calibrated_suffix_no_unbound_local_os(monkeypatch, tmp_path):
+    """Verify that _bake_calibrated_hdri with a '_calibrated' filename evaluates clean_raw_path
+    and os.path.isfile without triggering UnboundLocalError on 'os'."""
+    _ensure_fake_qt_if_absent(monkeypatch)
+    monkeypatch.delitem(sys.modules, "hdri_match_solaris.panel_ui", raising=False)
+    from hdri_match_solaris import panel_ui
+
+    calibrated_exr = str(tmp_path / "pool_hdri_finalv02_calibrated_A_v4_half.exr")
+    open(calibrated_exr, "wb").write(b"exr")
+
+    raw_exr = str(tmp_path / "pool_hdri_finalv02.exr")
+    open(raw_exr, "wb").write(b"raw_exr")
+
+    text_holder = {"val": calibrated_exr}
+
+    def _get_text():
+        return text_holder["val"]
+
+    def _set_text(new_val):
+        text_holder["val"] = new_val
+
+    fake_slider_zero = types.SimpleNamespace(value=lambda: 0.0)
+    fake_slider_one = types.SimpleNamespace(value=lambda: 1.0)
+    fake_grp_false = types.SimpleNamespace(isChecked=lambda: False)
+
+    fake_panel = types.SimpleNamespace(
+        txt_hdri=types.SimpleNamespace(
+            text=_get_text,
+            setText=_set_text,
+            blockSignals=lambda flag: None,
+        ),
+        _hdri_full_array=np.full((8, 16, 3), 1.0, dtype=np.float32),
+        sld_ev=fake_slider_zero,
+        sld_black=fake_slider_zero,
+        sld_temp=fake_slider_zero,
+        sld_tint=fake_slider_zero,
+        sld_sat=fake_slider_one,
+        sld_contrast=fake_slider_one,
+        grp_horizon=fake_grp_false,
+        grp_softclip=fake_grp_false,
+        grp_sun=fake_grp_false,
+        grp_ground_proj=fake_grp_false,
+        chk_extract_inpaint=fake_grp_false,
+        grp_extract=fake_grp_false,
+        _extracted_practicals_data=None,
+        _get_stage_lights=lambda: (None, None),
+        _sync_node=lambda: None,
+        log=lambda *a, **k: None,
+        log_error=lambda msg, err=None: None,
+    )
+
+    # Calling _bake_calibrated_hdri must execute the clean_raw_path check with os.path.isfile
+    # without raising UnboundLocalError: cannot access local variable 'os' where it is not associated with a value
+    res = panel_ui.HdriMatchSolarisPanel._bake_calibrated_hdri(fake_panel, notify_ui=False, force_bake=False)
+    assert res == raw_exr.replace("\\", "/")
+    assert text_holder["val"] == raw_exr.replace("\\", "/")
