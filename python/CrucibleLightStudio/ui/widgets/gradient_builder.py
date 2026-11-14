@@ -1,5 +1,7 @@
-import os
+import ctypes
 import math
+import os
+import random
 import sys
 try:
     from PySide6 import QtWidgets, QtCore, QtGui
@@ -294,7 +296,6 @@ class GradientBuilderDialog(QtWidgets.QDialog):
                 painter.drawPolygon(polygon)
                 
         elif t == 8: # Tracing Paper (Noise)
-            import random
             random.seed(int(count_val * 100))
             steps = int(40 + aspect * 100)
             for i in range(steps):
@@ -434,7 +435,6 @@ class GradientBuilderDialog(QtWidgets.QDialog):
                         painter.drawRect(QtCore.QRectF(c * sq_w, r * sq_h, sq_w, sq_h))
                         
         elif t == 16: # Clouds
-            import random
             random.seed(int(count_val * 100))
             num_clouds = max(5, int(count_val * 100))
             
@@ -453,7 +453,6 @@ class GradientBuilderDialog(QtWidgets.QDialog):
                     painter.drawEllipse(QtCore.QPointF(cx, cy), rad * (aspect * 2.0), rad * ((1.0 - aspect) * 2.0))
                     
         elif t == 17: # Leaves / Foliage
-            import random
             random.seed(int(count_val * 100))
             num_leaves = max(10, int(count_val * 150))
             
@@ -479,7 +478,6 @@ class GradientBuilderDialog(QtWidgets.QDialog):
                 painter.restore()
                 
         elif t == 18: # Tree Branches
-            import random
             random.seed(int(count_val * 100))
             num_trees = max(1, int(count_val * 8))
             
@@ -549,13 +547,11 @@ class GradientBuilderDialog(QtWidgets.QDialog):
                 painter.drawPath(path)
                 
         elif t == 20: # Noise
-            import random
             noise_idx = self.noise_combo.currentIndex()
             random.seed(int(count_val * 100))
             
             if noise_idx == 0: # White Noise
                 # Fast byte array random noise
-                import os
                 # We do a quick noise on a smaller image and scale it up to avoid Python UI locks
                 nw, nh = max(4, int(w * aspect)), max(4, int(h * aspect))
                 n_img = QtGui.QImage(nw, nh, QtGui.QImage.Format_Grayscale8)
@@ -567,7 +563,6 @@ class GradientBuilderDialog(QtWidgets.QDialog):
                     val = int(b[i] * b_mult)
                     b[i] = min(255, max(0, val))
                     
-                import ctypes
                 ptr = ctypes.c_char.from_buffer(b)
                 n_img = QtGui.QImage(ptr, nw, nh, nw, QtGui.QImage.Format_Grayscale8).copy()
                 
@@ -620,7 +615,6 @@ class GradientBuilderDialog(QtWidgets.QDialog):
                         painter.drawEllipse(QtCore.QPointF(cx, cy), rad, rad)
                         
             elif noise_idx == 3: # Caustics
-                import math
                 num_pts = max(10, int(aspect * 150))
                 painter.setCompositionMode(QtGui.QPainter.CompositionMode_Plus)
                 

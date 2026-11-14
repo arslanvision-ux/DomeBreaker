@@ -1923,7 +1923,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        print("[DomeBreaker] Loading v2.0.8...")
+        print("[DomeBreaker] Loading v2.0.9...")
         self._initializing = True
         self._restoring_state = False
         if not parent and self.isWindow():
@@ -1996,7 +1996,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         restored = self._restore_state_from_scene(notify=False, allow_prefs=False)
         self._initializing = False
         self.log("DomeBreaker panel initialized. Ready.", "SUCCESS")
-        print("[DomeBreaker] Ready v2.0.8.")
+        print("[DomeBreaker] Ready v2.0.9.")
 
     def _get_bg_bake_worker(self):
         if self._bg_bake_worker is None:
@@ -2129,7 +2129,7 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         lbl_t.setAlignment(QtCore.Qt.AlignCenter)
         lbl_t.setStyleSheet("font-size: 20px; font-weight: 900; color: #ffae19; letter-spacing: 2px;")
 
-        lbl_v = QtWidgets.QLabel("v2.0.8 - Solaris USD Lighting & Environment Suite")
+        lbl_v = QtWidgets.QLabel("v2.0.9 - Solaris USD Lighting & Environment Suite")
         lbl_v.setAlignment(QtCore.Qt.AlignCenter)
         lbl_v.setStyleSheet("font-size: 11px; font-weight: bold; color: #5dade2; letter-spacing: 0.8px;")
         title_box.addWidget(lbl_t)
@@ -10628,6 +10628,9 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         disk_mask = sub_dist <= radius
         if np.sum(disk_mask) == 0:
             disk_mask = sub_dist <= max(radius, 0.01)
+        if np.sum(disk_mask) == 0:
+            min_idx = np.unravel_index(int(np.argmin(sub_dist)), sub_dist.shape)
+            disk_mask[min_idx] = True
 
         disk_pixels = sub[disk_mask]
         disk_domega = d_omega_sub[disk_mask]
@@ -13615,9 +13618,11 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         try:
             hdri_path = p["hdri_path"]
             plate_path = p.get("plate_path", "")
+            resolved_hdri_path = _resolve_image_path(hdri_path) if hdri_path else ""
+            resolved_plate_path = _resolve_image_path(plate_path) if plate_path else ""
 
             # If auto-calibrate is checked and plate is provided, compute exposure/color match from plate
-            if p.get("auto_cal", False) and plate_path and os.path.isfile(plate_path):
+            if p.get("auto_cal", False) and resolved_plate_path and os.path.isfile(resolved_plate_path):
                 import numpy as np
                 from hdri_match.core.pipeline import CalibrationPipeline
                 pipeline = CalibrationPipeline()
@@ -13630,8 +13635,8 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     "INFO",
                 )
                 pipeline.load_inputs(
-                    hdri_path,
-                    plate_path,
+                    resolved_hdri_path or hdri_path,
+                    resolved_plate_path,
                     input_space=hdri_cs,
                     working_space="Linear",
                     plate_space=plate_cs,
@@ -14026,9 +14031,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
     def _analyze_hdri_hotspots(self, notify_ui=False):
         """Analyze the HDRI to detect and count potential bright practical hotspot emitters."""
         try:
+            import numpy as np
             arr = getattr(self, '_hdri_orig_full', None)
             if arr is None:
-                path = self.txt_hdri.text().strip()
+                path = _resolve_image_path(self.txt_hdri.text().strip())
                 if path and os.path.isfile(path):
                     from hdri_match.io.loader import load_exr_to_numpy
                     arr = load_exr_to_numpy(path)
@@ -14039,7 +14045,6 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
                     self.log("Please load a valid HDRI file first to analyze hotspots.", "WARNING")
                 return 0
 
-            import numpy as np
             H, W = arr.shape[:2]
 
             # 1. Mask primary sun if Sun Relighting is active so we only count practical lights
@@ -14180,9 +14185,10 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
         from hdri_match_solaris.oiio_adapter import save_image_with_oiio
 
         hdri_path = p.get("hdri_path", "").strip()
+        resolved_hdri_path = _resolve_image_path(hdri_path) if hdri_path else ""
         arr = getattr(self, '_hdri_full_array', None)
         if arr is None:
-            arr = load_exr_to_numpy(hdri_path)
+            arr = load_exr_to_numpy(resolved_hdri_path or hdri_path)
             if arr is not None:
                 self._hdri_full_array = arr[..., :3].astype(np.float32)
                 arr = self._hdri_full_array
@@ -14871,11 +14877,12 @@ class HdriMatchSolarisPanel(QtWidgets.QWidget):
             return
 
         try:
-            self.log(f"Analyzing equirectangular HDRI for solar centroid: {hdri_path}...", "DETAIL")
+            resolved_hdri = _resolve_image_path(hdri_path.strip())
+            self.log(f"Analyzing equirectangular HDRI for solar centroid: {resolved_hdri}...", "DETAIL")
             from hdri_match.io.loader import load_exr_to_numpy
             from hdri_match.analysis.hdri_stats import HDRIStats
 
-            arr = load_exr_to_numpy(hdri_path)
+            arr = load_exr_to_numpy(resolved_hdri)
             pos = HDRIStats.compute_sun_position(arr)
             u, v = pos["uv"]
             self.sld_sun_u.setValue(float(u))

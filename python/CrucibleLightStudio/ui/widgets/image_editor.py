@@ -169,7 +169,6 @@ class ImageEditorDialog(QtWidgets.QDialog):
             new_path = f"{base}_edited{ext}"
             try:
                 import subprocess
-                import os
                 
                 hoiiotool_cmd = "hoiiotool"
                 if "HFS" in os.environ:

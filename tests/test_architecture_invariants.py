@@ -155,21 +155,21 @@ def _ensure_fake_qt_if_absent(monkeypatch):
 
 def test_version_consistency():
     with open(os.path.join(REPO_ROOT, "VERSION"), "r", encoding="utf-8") as f:
-        assert f.read().strip() == "v2.0.8"
+        assert f.read().strip() == "v2.0.9"
 
     with open(os.path.join(PYTHON_ROOT, "hdri_match_solaris", "__init__.py"), "r", encoding="utf-8") as f:
         sol_init = f.read()
-    assert '__version__ = "2.0.8"' in sol_init
+    assert '__version__ = "2.0.9"' in sol_init
     assert '__houdini_min__ = "20.0"' in sol_init
 
     with open(os.path.join(PYTHON_ROOT, "domebreaker", "__init__.py"), "r", encoding="utf-8") as f:
         db_init = f.read()
-    assert '__version__ = "2.0.8"' in db_init
+    assert '__version__ = "2.0.9"' in db_init
 
     with open(os.path.join(PYTHON_ROOT, "hdri_match_solaris", "panel_ui.py"), "r", encoding="utf-8") as f:
         panel_src = f.read()
-    assert "Loading v2.0.8..." in panel_src
-    assert "v2.0.8 - Solaris USD Lighting & Environment Suite" in panel_src
+    assert "Loading v2.0.9..." in panel_src
+    assert "v2.0.9 - Solaris USD Lighting & Environment Suite" in panel_src
 
 
 def test_no_c1_mojibake_orphan_fe0f_or_4byte_emojis():
@@ -1554,3 +1554,58 @@ def test_bake_calibrated_hdri_with_calibrated_suffix_no_unbound_local_os(monkeyp
     res = panel_ui.HdriMatchSolarisPanel._bake_calibrated_hdri(fake_panel, notify_ui=False, force_bake=False)
     assert res == raw_exr.replace("\\", "/")
     assert text_holder["val"] == raw_exr.replace("\\", "/")
+
+
+def test_no_local_import_shadowing_before_use_across_codebase():
+    """
+    AST invariant: No function or method in python/ or scripts/ may reference a name
+    (or capture it in a nested closure) at a line earlier than a local `import` binding
+    of that same name in that function's scope (which causes Python UnboundLocalError).
+    """
+    import ast
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    search_roots = [repo_root / "python", repo_root / "scripts"]
+    violations = []
+
+    def _walk_same_scope(node):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            yield child
+            yield from _walk_same_scope(child)
+
+    for root in search_roots:
+        for py_file in sorted(root.rglob("*.py")):
+            source = py_file.read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(source, filename=str(py_file))
+            for fn in ast.walk(tree):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                local_imports = {}
+                for node in _walk_same_scope(fn):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            bound = alias.asname or alias.name.split(".")[0]
+                            local_imports.setdefault(bound, node.lineno)
+                    elif isinstance(node, ast.ImportFrom):
+                        for alias in node.names:
+                            if alias.name == "*":
+                                continue
+                            bound = alias.asname or alias.name
+                            local_imports.setdefault(bound, node.lineno)
+                if not local_imports:
+                    continue
+                # Check all loads (including inside nested helper functions that capture from fn)
+                for sub in ast.walk(fn):
+                    if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                        if sub.id in local_imports and sub.lineno < local_imports[sub.id]:
+                            rel_path = py_file.relative_to(repo_root).as_posix()
+                            violations.append(
+                                f"{rel_path}:{fn.name} uses '{sub.id}' at L{sub.lineno} "
+                                f"before local import at L{local_imports[sub.id]}"
+                            )
+
+    assert not violations, "UnboundLocalError local-import traps detected:\n" + "\n".join(violations)
+
