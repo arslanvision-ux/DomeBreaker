@@ -16,8 +16,13 @@
   <p><em>Interactive Karma Lookdev with Chrome & 18% Grey calibration spheres, real-time 360° Room Dimension Analyzer, and live USD stage synchronization.</em></p>
 </div>
 
+<p align="center">
+  <a href="https://buymeacoffee.com/arslansvision/domebreaker">
+    <img src="https://img.shields.io/badge/Support%20DomeBreaker-Buy%20Me%20a%20Coffee%20%E2%98%95-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=000000" alt="Support DomeBreaker — Buy Me a Coffee" />
+  </a>
+</p>
+
 ---
-Buy Me a Coffee: https://buymeacoffee.com/arslansvision/domebreaker
 
 DomeBreaker is a high-performance Houdini Solaris / OpenUSD suite engineered to break the traditional limitations of infinite flat environment domes in feature film and episodic VFX pipelines. By transforming 2D equirectangular panoramas into parallax-accurate 3D room boxes, extracting practical lights with automatic inpainting, and constructing native multi-renderer USD networks, DomeBreaker gives lighters and lookdev artists physically plausible ground reflections, localized occlusion, and real-time interactive feedback.
 
